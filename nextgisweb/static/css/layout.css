@@ -523,6 +523,10 @@ h2:first-child,
   width: 32px;
   height: 32px;
 }
+.svgIcon-earth {
+  width: 30px;
+  height: 30px;
+}
 /* -- BASE STYLES -- */
 @font-face {
   font-family: "Roboto";
