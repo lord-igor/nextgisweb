@@ -37,6 +37,7 @@ define([
     // tools
     "ngw-webmap/MapToolbar",
     "ngw-webmap/controls/InitialExtent",
+    "ngw-webmap/controls/VirtualGlobe",
     "ngw-webmap/controls/InfoScale",
     "./tool/Base",
     "./tool/Zoom",
@@ -107,7 +108,7 @@ define([
     i18n,
     hbsI18n,
     MapToolbar,
-    InitialExtent, InfoScale, ToolBase, ToolZoom, ToolMeasure, Identify, FeatureHighlighter,
+    InitialExtent, VirtualGlobe, InfoScale, ToolBase, ToolZoom, ToolMeasure, Identify, FeatureHighlighter,
     NavigationMenu,
     LayersPanel, PrintMapPanel, SearchPanel, BookmarkPanel, SharePanel, InfoPanel,
     ToolSwipe,
@@ -719,6 +720,11 @@ define([
                     display: widget,
                     target: widget.leftTopControlPane,
                     tipLabel: i18n.gettext("Initial extent")
+                }),
+                new VirtualGlobe({
+                    display: widget,
+                    target: widget.leftTopControlPane,
+                    tipLabel: i18n.gettext("Virtual globe")
                 }),
                 new ol.control.Rotate({
                     tipLabel: i18n.gettext("Reset rotation"),
