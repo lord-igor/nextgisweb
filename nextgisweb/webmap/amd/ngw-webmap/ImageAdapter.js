@@ -20,14 +20,17 @@ define([
                 },
                 ratio: 1,
                 imageLoadFunction: function(image, src) {
+
                     var url = src.split("?")[0];
                     var query = src.split("?")[1];
                     var queryObject = ioQuery.queryToObject(query);
-                    image.getImage().src = url
+                    url = url 
                         + "?resource=" + queryObject["resource"]
                         + "&extent=" + queryObject["BBOX"]
                         + "&size=" + queryObject["WIDTH"] + "," + queryObject["HEIGHT"]
                         + "#" + Date.now(); // in-memory cache busting
+                    if (image) { image.getImage().src = url; }
+                    return url;
                 }
             });
 
