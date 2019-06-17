@@ -698,13 +698,12 @@ class _source_attr(SP):
 
         try:
             if iszip:
-                gdal.SetConfigOption(b'CPL_VSIL_ZIP_ALLOWED_EXTENSIONS', b'.data')
-                ogrfn = '/vsizip/' + datafile
+                ogrfn = '/vsizip/{%s}' % datafile
             else:
                 ogrfn = datafile
 
             with _set_encoding(encoding) as sdecode:
-                ogrds = ogr.Open(ogrfn)
+                ogrds = ogr.Open(ogrfn, 0)  # 0 for read-only
                 recode = sdecode
 
             if ogrds is None:
