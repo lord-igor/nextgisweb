@@ -10,7 +10,10 @@ from shutil import copyfileobj
 import sqlalchemy as sa
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
-import pip
+try:
+    from pip._internal import main as pip_main
+except ImportError:
+    from pip import main as pip_main
 
 from ..registry import registry_maker
 
@@ -90,31 +93,30 @@ class SequenceBackup(BackupBase):
 
 
 def backup(env, dst, nozip=False):
-    usezip = not nozip
+    if os.path.exists(dst):
+        raise RuntimeError("Destination path already exists!")
 
-    assert not os.path.exists(dst), "Path already exists!"
-
-    if usezip:
-        zipf = ZipFile(dst, 'w', allowZip64=True)
-    else:
+    if nozip:
         os.mkdir(dst)
+    else:
+        zipf = ZipFile(dst, 'w', allowZip64=True)
 
     def openfile(fn):
-        if usezip:
+        if nozip:
+            return open(ptjoin(dst, fn), 'wb')
+        else:
             tmpf = NamedTemporaryFile(delete=False)
             tmpf._target = fn
             return tmpf
-        else:
-            return open(ptjoin(dst, fn), 'wb')
 
     def putfile(fd):
-        if usezip:
+        if nozip:
+            pass
+        else:
             fd.flush()
             fd.close()
             zipf.write(fd.name, fd._target)
             os.remove(fd.name)
-        else:
-            pass
 
     sqlitefile = openfile('db.sqlite')
     engine = sa.create_engine('sqlite:///' + sqlitefile.name)
@@ -123,7 +125,7 @@ def backup(env, dst, nozip=False):
         buf = openfile('requirements')
         stdout = sys.stdout
         sys.stdout = buf
-        pip.main(['freeze', ])
+        pip_main(['freeze', ])
         putfile(buf)
     finally:
         sys.stdout = stdout
@@ -147,7 +149,7 @@ def backup(env, dst, nozip=False):
             if obj.is_binary:
                 if compdir is None:
                     compdir = '%s.bin' % comp.identity
-                    if not usezip:
+                    if nozip:
                         os.mkdir(ptjoin(dst, compdir))
 
                 cleankey = re.sub('[^A-Za-z0-9]', '_', itm.key)[:64]

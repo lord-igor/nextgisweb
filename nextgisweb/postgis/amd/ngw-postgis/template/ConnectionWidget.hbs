@@ -1,5 +1,5 @@
 <div data-dojo-type="${baseClass}" data-dojo-attach-point="focusNode"
-    data-ngw-serialize-prefix="${prefix}" style="padding: 1ex;">
+    data-ngw-serialize-prefix="${prefix}" class="padding-block">
 
     <div data-dojo-type="dojox/layout/TableContainer" data-dojo-props="cols:1">
 
@@ -7,6 +7,11 @@
             data-dojo-props="required: true"
             data-ngw-serialize="hostname"
             title="{{gettext 'Host'}}" style="width: 100%"></div>
+
+        <div data-dojo-type="dijit/form/ValidationTextBox"
+            data-dojo-props="required: false, regExp:'\\d+'"
+            data-ngw-serialize="port"
+            title="{{gettext 'Port'}}" style="width: 100%"></div>
 
         <div data-dojo-type="dijit/form/ValidationTextBox"
             data-dojo-props="required: true"

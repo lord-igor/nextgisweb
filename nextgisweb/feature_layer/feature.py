@@ -1,10 +1,12 @@
 # -*- coding: utf-8 -*-
+from osgeo import ogr
+
 class Feature(object):
 
     def __init__(self, layer=None, id=None, fields=None, geom=None, box=None, calculations=None):
         self._layer = layer
 
-        self._id = int(id) if id else None
+        self._id = int(id) if id is not None else None
 
         self._geom = geom
         self._box = box
@@ -24,13 +26,13 @@ class Feature(object):
     @property
     def label(self):
         if self._layer and self._layer.feature_label_field:
-            # Если объект привязан к слою и услоя указано поле наименования,
-            # то используем его в качестве наименования
+            # If object is linked to a layer and naming field is set for a layer
+            # use it for naming.
             value = self._fields[self._layer.feature_label_field.keyname]
             if value is not None:
                 return unicode(value)
 
-        # В противном случае используем id объекта
+        # Otherwise use object id
         return "#%d" % self._id
 
     def __unicode__(self):
@@ -64,6 +66,20 @@ class Feature(object):
             properties=self.fields,
             geometry=self.geom,
         )
+
+    def to_ogr(self, layer_defn):
+        ogr_feature = ogr.Feature(layer_defn)
+        ogr_feature.SetFID(self.id)
+        ogr_feature.SetGeometry(
+            ogr.CreateGeometryFromWkb(self.geom.wkb)
+        )
+
+        for field in self.fields:
+            ogr_feature[field.encode("utf8")] = self.fields[
+                field
+            ]
+
+        return ogr_feature
 
 
 class FeatureSet(object):

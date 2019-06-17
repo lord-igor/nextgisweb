@@ -57,8 +57,7 @@ define([
             }).placeAt(this);
 
             this.btnContainer = new ContentPane({
-                region: "top",
-                style: "padding: 0; margin-bottom: 1ex;"
+                region: "bottom"
             }).placeAt(this);
 
             domClass.add(this.btnContainer.domNode, "ngwButtonStrip");
@@ -79,13 +78,11 @@ define([
 
                 this.buttons.push(new Button({
                     label: i18n.gettext("Create"),
-                    iconClass: "dijitIconNewTask",
                     onClick: lang.hitch(this, function () { this.createObj(false); })
                 }).placeAt(this.btnContainer));
 
                 this.buttons.push(new Button({
                     label: i18n.gettext("Create and edit"),
-                    iconClass: "dijitIconNewTask",
                     onClick: lang.hitch(this, function () { this.createObj(true); })
                 }).placeAt(this.btnContainer));
 
@@ -93,7 +90,6 @@ define([
 
                 this.buttons.push(new Button({
                     label: i18n.gettext("Save"),
-                    iconClass: "dijitIconSave",
                     onClick: lang.hitch(this, this.updateObj)
                 }).placeAt(this.btnContainer));
 
@@ -101,7 +97,6 @@ define([
 
                 this.buttons.push(new Button({
                     label: i18n.gettext("Delete"),
-                    iconClass: "dijitIconDelete",
                     onClick: lang.hitch(this, this.deleteObj)
                 }).placeAt(this.btnContainer));
 
@@ -109,10 +104,10 @@ define([
 
             if (this.operation === "read" || this.operation === "update") {
 
-                // Отключаем кнопку Обновить, так как в текущем варианте
-                // данная операция не корректно работает со следующими
-                // виджетами: PermissionWidget, FieldsWidget, ItemWidget.
-                // Обновить состояние виджета (вместе со страницей) можно по F5.
+                // Turn off Refresh button, as currently this will not work
+                // correctly with the following widgets:
+                // PermissionWidget, FieldsWidget, ItemWidget.
+                // Update widget state (with the page) with F5.
 
                 // this.buttons.push(new Button({
                 //     label: "Обновить",
@@ -121,6 +116,10 @@ define([
                 // }).placeAt(this.btnContainer));
 
             }
+
+            array.forEach(this.buttons, function (btn) {
+                domClass.add(btn.domNode, "dijitButton--primary"); 
+            });
 
         },
 
@@ -132,27 +131,27 @@ define([
             }
         },
 
-        // Сериализация и валидация
-        // ========================
+        // Serialization and validation
+        // ============================
 
         validateData: function () {
             var deferred = new Deferred(),
                 promises = [],
                 errors = [];
 
-            // Регистрация ошибки, эта функция передается дочерним
-            // виджетам в качестве параметра
+            // Register error, this function is given to
+            // children widgets as a parameter
             function errback(err) {
                 errors.push(err);
             }
 
             array.forEach(this.members, function (member) {
-                // Валидация может быть асинхронной, в этом случае
-                // member.validate вернет deferred, собираем их в массив
+                // Validation can be asynchronous,
+                // member.validate will return deferred in this case, collect them into an array
                 promises.push(when(member.validateData(errback)).then(
                     function /* callback */ (success) {
-                        // Если валидация завершилась с ошибкой,
-                        // отмечаем заголовок красным цветом
+                        // If validation returned an error
+                        // mark a heading red\
 
                         if (!success) { 
                             domClass.add(member.controlButton.domNode, "dijitTabError"); 
@@ -169,14 +168,14 @@ define([
                 function /* callback */ (results) {
                     var success = true;
 
-                    // Проверяем результаты всех членов, все должны
-                    // вернуть истинное выражение
+                    // Check results of all members,
+                    // all must return True
                     array.forEach(results, function (res) {
                         success = success && res;
                     });
 
-                    // Так же как и дочерние виждеты составной виджет
-                    // возвращает истину или ложь, и reject в случае ошибки.
+                    // As children widgets, composit widget
+                    // returns True or False and reject if there is an error.
                     deferred.resolve(success);
                 },
 
@@ -289,8 +288,8 @@ define([
         },
 
 
-        // Всякие действия и кнопки
-        // ========================
+        // Different actions and buttons
+        // =============================
 
         lock: function () {
             domStyle.set(this.tabContainer.domNode, "display", "none");
@@ -312,19 +311,19 @@ define([
         },
 
         errorMessage: function (e) {
-            var S_ERROR_MESSAGE = i18n.gettext("Error message:")
+            var S_ERROR_MESSAGE = i18n.gettext("Error message:");
 
             if (e.error == E_REQUEST && e.status == 400) {
-                alert(i18n.gettext("Errors found during data validation on server. Correct error and try again.") + " " + S_ERROR_MESSAGE + "\n\n" + e.data.message);
+                alert(i18n.gettext("Errors found during data validation on server. Correct them and try again.") + "\n\n" + S_ERROR_MESSAGE + " " + e.data.message);
 
             } else if (e.error == E_REQUEST && e.status == 403) {
-                alert(i18n.gettext("Insufficient permissions to perform the operation.") + " " + S_ERROR_MESSAGE + "\n\n" + e.data.message);
+                alert(i18n.gettext("Insufficient permissions to perform the operation. Forgot to log in?") + "\n\n" + S_ERROR_MESSAGE + " " + e.data.message);
 
             } else if (e.error == E_INVALID_DATA) {
                 alert(i18n.gettext("Errors found during data validation. Tabs with errors marked in red."));
 
             } else {
-                alert(i18n.gettext("Unexpected error occurred during the operation.") + " " + S_ERROR_MESSAGE + "\n\n" + e.data.message);
+                alert(i18n.gettext("Unexpected error occurred during the operation.") + "\n\n" + S_ERROR_MESSAGE + " " + e.data.message);
             }
         },
 
@@ -354,7 +353,7 @@ define([
                 method: "PUT"
             }).then(
                 /* callback */ lang.hitch(this, function () {
-                    this.unlock();
+                    window.location = route.resource.show({id: this.id});
                 }),
                 /* errback  */ lang.hitch(this, this.unlock)
             );

@@ -32,6 +32,15 @@
                 disabled="disabled">
                 {{gettext 'Remove'}}
             </div>
+
+            <div data-dojo-type="dijit/form/Button"
+                data-dojo-attach-point="btnLayerOrder"
+                data-dojo-props="iconClass: 'dijitEditorIcon dijitEditorIconSelectAll'"
+                style="float:right"
+                class="dijitButton--signal">
+                {{gettext 'Layer order'}}
+            </div>
+
         </div>
 
         <div data-dojo-attach-point="containerTree"
@@ -89,6 +98,13 @@
                             data-dojo-type="dijit/form/Select"
                             style="width: 100%;"
                             title="{{gettext 'Adapter'}}">
+                        </div>
+
+                        <div data-dojo-attach-point="wLayerStyle"
+                            data-dojo-type="dijit/form/ValidationTextBox"
+                            data-dojo-props="disabled: true"
+                            style="width: 100%"
+                            title="{{gettext 'Style resource'}}">
                         </div>
 
                     </div>

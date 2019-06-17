@@ -9,13 +9,15 @@
     from bunch import Bunch
 %>
 <head>
+    <% system_name = request.env.core.settings_get('core', 'system.full_name') %>
+
     <title>
         <% page_title = '' %>
         %if hasattr(self, 'title'):
             <% page_title += self.title() + ' | ' %>
         %endif
 
-        <% page_title += request.env.core.settings['system.full_name'] %>
+        <% page_title += system_name %>
         ${page_title}
     </title>
 
@@ -42,6 +44,8 @@
     <link href="${request.route_url('amd_package', subpath='dijit/themes/claro/claro.css')}"
         rel="stylesheet" media="screen"/>
 
+    <link href="${request.route_url('pyramid.custom_css')}" rel="stylesheet" type="text/css"/>
+
     <script type="text/javascript">
         var ngwConfig = {
             applicationUrl: ${request.application_url | json.dumps, n},
@@ -58,6 +62,10 @@
             baseUrl: ${request.route_url('amd_package', subpath="dojo") | json.dumps, n},
             locale: ${request.locale_name | json.dumps, n}
         };
+
+        %if (hasattr(request, 'context') and hasattr(request.context, 'id')):
+        var ngwResourceId = ${request.context.id};
+        %endif
     </script>
 
     <script src="${request.route_url('amd_package', subpath='dojo/dojo.js')}"></script>
@@ -70,65 +78,17 @@
         ${self.head()}
     %endif
 
+    %for a in request.amd_base:
+        <script src="${request.route_url('amd_package', subpath='%s.js' % a)}"></script>
+    %endfor
+
 </head>
 
-<body class="claro nextgis">
-
+<body class="claro nextgis <%block name='body_class'/>">
     %if not custom_layout:
         <div class="layout ${'maxwidth' if maxwidth else ''}">
-            <div id="header" class="header container">
-                <% settings = request.env.pyramid.settings %>
-                <div class="header__right">
-                    <ul class="menu-list list-inline">
-                        <li class="menu-list__item"><a href="${request.route_url('resource.root')}">${tr(_('Resources'))}</a></li>
-                        %if request.user.is_administrator:
-                            <li class="menu-list__item"><a href="${request.route_url('pyramid.control_panel')}">${tr(_('Control panel'))}</a></li>
-                        %endif    
-                        
-                        <% help_page = request.env.pyramid.help_page.get(request.locale_name) %>
-                        %if help_page:
-                            <li class="menu-list__item">
-                                %if re.match("^http[s]?", help_page):
-                                    <a href="${help_page}" target="_blank">
-                                %else:
-                                    <a href="${request.route_url('pyramid.help_page')}">
-                                %endif
-                                ${tr(_('Help'))}</a>
-                            </li>
-                        %endif
-                    </ul>
-                    <ul class="user-menu-list list-inline">
-                        %if request.user.keyname == 'guest':
-                            <li class="user-menu-list__item"><a href="${request.route_url('auth.login')}">${tr(_('Sign in'))}</a></li>
-                        %else:
-                            <li class="user user-menu-list__item">
-                                <i class="icon-user"></i>
-                                ${request.user}
-                            </li>
-                            <li class="sign-out user-menu-list__item"><a href="${request.route_url('auth.logout')}">
-                                <i class="icon-logout"></i>
-                            </a></li>
-                        %endif
-                    </ul>
-                    <ul class="lang-list list-inline">
-                        %for locale in request.env.core.locale_available:
-                            <li class="lang-list__item"><a href="${request.route_url('pyramid.locale', locale=locale, _query=dict(next=request.url))}">${locale.upper()}</a></li>
-                        %endfor
-                    </ul>
-                </div>
-                <div class="header__left">
-                    <a class="header__title" href="${request.application_url}">    
-                        %if 'logo' in settings and os.path.isfile(settings['logo']):
-                            <div class="header__title__logo">
-                                <img class="logo__pic" src="${request.route_url('pyramid.logo')}"/>
-                            </div>    
-                        %endif
-                        <div class="header__title__inner">
-                            ${request.env.core.settings['system.full_name']}
-                        </div>
-                    </a>
-                </div>    
-            </div> <!--./header -->
+        
+            <%include file="nextgisweb:pyramid/template/header.mako" args="title=system_name"/>
             
             %if obj and hasattr(obj,'__dynmenu__'):
                 <%
@@ -209,12 +169,12 @@
                 resize();
 
                 on(window, 'resize', resize);
+
             });
 
         </script>
 
     %endif
-
 </body>
 
 </html>

@@ -39,8 +39,12 @@ define([
             });
         },
 
+        reload: function () {
+            this.olSource.changed();
+        },
+
         postscript: function () {
-            // НЕ вызываем Stateful.postscript!
+            // Don't call Stateful.postscript!
         },
 
         _visibilityGetter: function () {
@@ -51,7 +55,7 @@ define([
             if (this._visibility != value) {
                 this.olLayer.setVisible(value);
                 this._visibility = value;
-            };
+            }
         }
 
     });

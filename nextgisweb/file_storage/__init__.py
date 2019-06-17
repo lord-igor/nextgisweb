@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 import os
 from shutil import copyfileobj
+from collections import OrderedDict, defaultdict
 
 from ..component import Component
 from ..core import BackupBase
@@ -58,16 +59,35 @@ class FileStorageComponent(Component):
     def filename(self, fileobj, makedirs=False):
         assert fileobj.component, "Component not set!"
 
-        # Разделяем на два уровня директорий по первым символам id
+        # Separate in two folder levels by first id characters
         levels = (fileobj.uuid[0:2], fileobj.uuid[2:4])
         path = os.path.join(self.path, fileobj.component, *levels)
 
-        # Создаем директории если нужно
+        # Create folders if needed
         if makedirs and not os.path.isdir(path):
             os.makedirs(path)
 
         return os.path.join(path, str(fileobj.uuid))
 
+    def query_stat(self):
+        # Traverse all objects in file storage and calculate total
+        # and per component size in filesystem
+        
+        itm = lambda: OrderedDict(size=0, count=0)
+        result = OrderedDict(
+            total=itm(), component=defaultdict(itm))
+        
+        def add_item(itm, size):
+            itm['size'] += size
+            itm['count'] += 1
+
+        for fileobj in FileObj.query():
+            statres = os.stat(self.filename(fileobj))
+            add_item(result['total'], statres.st_size)
+            add_item(result['component'][fileobj.component], statres.st_size)
+
+        return result
+
     settings_info = (
-        dict(key='path', desc=u"Директория для хранения файлов (обязательно)"),
+        dict(key='path', desc=u"Files storage folder (required)"),
     )

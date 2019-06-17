@@ -1,8 +1,10 @@
 /*global define, ngwConfig*/
 define([
     "dojo/_base/declare",
-    "ngw/modelWidget/Widget",
-    "ngw/modelWidget/ErrorDisplayMixin",
+    "dojo/_base/lang",
+    "dojo/store/Memory",
+    "ngw-pyramid/modelWidget/Widget",
+    "ngw-pyramid/modelWidget/ErrorDisplayMixin",
     "dijit/_TemplatedMixin",
     "dijit/_WidgetsInTemplateMixin",
     "ngw-pyramid/i18n!auth",
@@ -12,12 +14,15 @@ define([
     "dojo/on",
     // template
     "dijit/form/CheckBox",
-    "dijit/form/SimpleTextarea",    
+    "dijit/form/SimpleTextarea",
     "dojox/layout/TableContainer",
+    "ngw-auth/PrincipalMemberSelect",
     "ngw-pyramid/form/KeynameTextBox",
     "ngw-pyramid/form/DisplayNameTextBox"
 ], function (
     declare,
+    lang,
+    Memory,
     Widget,
     ErrorDisplayMixin,
     _TemplatedMixin,
@@ -33,17 +38,25 @@ define([
         identity: "auth_user",
         title: i18n.gettext("Group"),
 
+        postCreate: function () {
+            this.inherited(arguments);
+
+            if (this.operation === 'create') {
+                this.members.addOption(lang.clone(this.users));
+            }
+        },
+
         validateWidget: function () {
             var widget = this;
 
             var result = { isValid: true, error: [] };
 
             array.forEach([this.displayName, this.keyname], function (subw) {
-                // форсируем показ значка при проверке
+                // force icon display when checking
                 subw._hasBeenBlurred = true;
                 subw.validate();
 
-                // если есть ошибки, фиксируем их
+                // if there're errors, mark them
                 if (!subw.isValid()) {
                     result.isValid = false;
                 }
@@ -57,6 +70,15 @@ define([
             this.keyname.set("value", value.keyname);
             this.description.set("value", value.description);
             this.register.set("checked", value.register);
+
+            // show group members at the top of the list
+            var userStore = new Memory({data: this.users});
+            this.members.addOption(
+                userStore.query(null, {sort: [
+                    {attribute: "selected", descending: true},
+                    {attribute: "label"}
+                ]})
+            );
         },
 
         _getValueAttr: function () {
@@ -64,7 +86,8 @@ define([
                 display_name: this.displayName.get("value"),
                 keyname: this.keyname.get("value"),
                 description: this.description.get("value"),
-                register: this.register.get("checked")
+                register: this.register.get("checked"),
+                members: this.members.get("value")
             };
         }
     });

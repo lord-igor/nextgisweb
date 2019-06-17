@@ -4,20 +4,24 @@ import sys
 import json
 import traceback
 from collections import OrderedDict
+import zope.event
 
 from pyramid.response import Response
 
+from .. import db
+from .. import geojson
 from ..env import env
 from ..models import DBSession
 from ..auth import User
 from ..pyramid import viewargs
 
-from .model import Resource
+from .model import Resource, ResourceSerializer
 from .scope import ResourceScope
 from .exception import ResourceError, ValidationError, ForbiddenError
 from .serialize import CompositeSerializer
 from .view import resource_factory
 from .util import _
+from .events import AfterResourcePut, AfterResourceCollectionPost
 
 
 PERM_READ = ResourceScope.read
@@ -26,117 +30,11 @@ PERM_MCHILDREN = ResourceScope.manage_children
 PERM_CPERM = ResourceScope.change_permissions
 
 
-@viewargs(renderer='json')
-def child_get(request):
-    # TODO: Security
-
-    child_id = request.matchdict['child_id']
-    child_id = None if child_id == '' else child_id
-
-    query = Resource.query().with_polymorphic('*').filter_by(
-        parent_id=request.context.id if request.context else None)
-
-    if child_id is not None:
-        query = query.filter_by(id=child_id)
-
-    result = []
-
-    for child in query:
-        serializer = CompositeSerializer(child, request.user)
-        serializer.serialize()
-
-        if child_id is not None:
-            return serializer.data
-        else:
-            result.append(serializer.data)
-
-    return result
-
-
-def child_put(request):
-    child_id = request.matchdict['child_id']
-    assert child_id != ''
-
-    data = request.json_body
-
-    child = Resource.query().with_polymorphic('*') \
-        .filter_by(id=child_id).one()
-
-    serializer = CompositeSerializer(child, request.user, data)
-
-    with DBSession.no_autoflush:
-        result = serializer.deserialize()
-
-    DBSession.flush()
-    return Response(
-        json.dumps(result), status_code=200,
-        content_type=b'application/json')
-
-
-def child_post(request):
-    child_id = request.matchdict['child_id']
-    assert child_id == ''
-
-    data = request.json_body
-
-    data['resource']['parent'] = dict(id=request.context.id)
-
-    cls = Resource.registry[data['resource']['cls']]
-    child = cls(owner_user=request.user)
-
-    deserializer = CompositeSerializer(child, request.user, data)
-    deserializer.members['resource'].mark('cls')
-
-    with DBSession.no_autoflush:
-        deserializer.deserialize()
-
-    child.persist()
-    DBSession.flush()
-
-    location = request.route_url(
-        'resource.child',
-        id=child.parent_id,
-        child_id=child.id)
-
-    data = OrderedDict(id=child.id)
-    data['parent'] = dict(id=child.parent_id)
-
-    return Response(
-        json.dumps(data), status_code=201,
-        content_type=b'application/json', headerlist=[
-            (b"Location", bytes(location)), ])
-
-
-def child_delete(request):
-    child_id = request.matchdict['child_id']
-    assert child_id != ''
-
-    child = Resource.query().with_polymorphic('*') \
-        .filter_by(id=child_id).one()
-
-    def delete(obj):
-        request.resource_permission(PERM_MCHILDREN, obj)
-        for chld in obj.children:
-            delete(chld)
-
-        request.resource_permission(PERM_DELETE, obj)
-        DBSession.delete(obj)
-
-    with DBSession.no_autoflush:
-        delete(child)
-
-    DBSession.flush()
-
-    return Response(
-        json.dumps(None), status_code=200,
-        content_type=b'application/json')
-
-
 def exception_to_response(request, exc_type, exc_value, exc_traceback):
     data = dict(exception=exc_value.__class__.__name__)
 
-    # Выбираем более подходящие HTTP-коды, впрочем зачем это нужно
-    # сейчас не очень понимаю - можно было и одним ограничиться.
+    # Select more appropriate HTTP-codes, thought we don't really need it
+    # right now - we could've used just one.
 
     scode = 500
 
@@ -146,8 +44,8 @@ def exception_to_response(request, exc_type, exc_value, exc_traceback):
     if isinstance(exc_value, ForbiddenError):
         scode = 403
 
-    # Общие атрибуты для идентификации того где произошла ошибка,
-    # устанавливаются внутри CompositeSerializer и Serializer.
+    # General attributes to identify where the error has happened,
+    # installed in CompositeSerializer and Serializer.
 
     if hasattr(exc_value, '__srlzr_cls__'):
         data['serializer'] = exc_value.__srlzr_cls__.identity
@@ -156,16 +54,15 @@ def exception_to_response(request, exc_type, exc_value, exc_traceback):
         data['attr'] = exc_value.__srlzr_prprt__
 
     if isinstance(exc_value, ResourceError):
-        # Только для потомков ResourceError можно передавать сообщение
-        # пользователю как есть, в остальных случаях это может быть
-        # небезопасно, там могут быть куски SQL запросов или какие-то
-        # внутренние данные.
+        # For ResourceError children it is possible to send message to user
+        # as is, for other cases it might not be secure as it can contain
+        # SQL or some sensitive data.
 
         data['message'] = request.localizer.translate(exc_value.message)
 
     else:
-        # Для всех остальных генерируем универсальное сообщение об ошибке на
-        # основании имени класса исключительной ситуации.
+        # For all others let's generate universal error message based
+        # on class name of the exception.
 
         if 'serializer' in data and 'attr' in data:
             message = _("Unknown exception '%(exception)s' in serializer '%(serializer)s' attribute '%(attr)s'.")
@@ -176,7 +73,7 @@ def exception_to_response(request, exc_type, exc_value, exc_traceback):
 
         data['message'] = request.localizer.translate(message % data)
 
-        # Ошибка неожиданная, имеет смысл дать возможность ее записать.
+        # Unexpected error, makes sense to write it down.
 
         env.resource.logger.error(
             exc_type.__name__ + ': ' + unicode(exc_value.message) + "\n"
@@ -190,14 +87,12 @@ def exception_to_response(request, exc_type, exc_value, exc_traceback):
 def resexc_tween_factory(handler, registry):
     """ Tween factory для перехвата исключительных ситуаций API ресурса
 
-    Исключительная ситуация может возникнуть уже как во время выполнения
-    flush так и во время commit. Если flush еще можно вызвать явно, то
-    вызов commit в любом случае происходит не явно через pyramid_tm. Для
-    того, чтобы отловить эти ситуации используется pyramid tween, которая
-    регистрируется поверх pyramid_tm (см. setup_pyramid).
+    Exception can happen both during flush and commit. We can run flush explicitly,
+    but commit is ran hidden through pyramid_tm. To track those
+    situations pyramid tween is used, that is registered on top of pyramid_tm (see setup_pyramid).
 
-    После перехвата ошибки для нее генерируется представление в виде JSON
-    при помощи exception_to_response. """
+    After error intercept generate its JSON representation
+    using exception_to_response. """
 
     def resource_exception_tween(request):
         try:
@@ -205,9 +100,11 @@ def resexc_tween_factory(handler, registry):
         except:
             mroute = request.matched_route
             if mroute and mroute.name in (
-                'resource.child',
                 'resource.item',
-                'resource.collection'
+                'resource.collection',
+                'resource.permission',
+                'resource.quota',
+                'resource.search',
             ):
                 return exception_to_response(request, *sys.exc_info())
             raise
@@ -223,7 +120,7 @@ def item_get(context, request):
     serializer.serialize()
 
     return Response(
-        json.dumps(serializer.data), status_code=200,
+        geojson.dumps(serializer.data), status_code=200,
         content_type=b'application/json')
 
 
@@ -233,6 +130,8 @@ def item_put(context, request):
     serializer = CompositeSerializer(context, request.user, request.json_body)
     with DBSession.no_autoflush:
         result = serializer.deserialize()
+
+    zope.event.notify(AfterResourcePut(context, request))
 
     return Response(
         json.dumps(result), status_code=200,
@@ -268,7 +167,8 @@ def collection_get(request):
     parent = int(parent) if parent else None
 
     query = Resource.query().with_polymorphic('*') \
-        .filter_by(parent_id=parent)
+        .filter_by(parent_id=parent) \
+        .order_by(Resource.display_name)
 
     result = list()
     for resource in query:
@@ -278,7 +178,7 @@ def collection_get(request):
             result.append(serializer.data)
 
     return Response(
-        json.dumps(result), status_code=200,
+        json.dumps(result, cls=geojson.Encoder), status_code=200,
         content_type=b'application/json')
 
 
@@ -302,8 +202,11 @@ def collection_post(request):
     if 'cls' not in data['resource']:
         raise ValidationError(_("Resource class required."))
 
-    elif data['resource']['cls'] not in Resource.registry:
+    if data['resource']['cls'] not in Resource.registry:
         raise ValidationError(_("Unknown resource class '%s'.") % data['resource']['cls'])
+
+    elif data['resource']['cls'] in request.env.resource.disabled_cls:
+        raise ValidationError(_("Resource class '%s' disabled.") % data['resource']['cls'])
 
     cls = Resource.registry[data['resource']['cls']]
     resource = cls(owner_user=request.user)
@@ -319,8 +222,10 @@ def collection_post(request):
 
     result = OrderedDict(id=resource.id)
 
-    # TODO: Родитель возвращается только в целях совместимости
+    # TODO: Parent is returned only for compatibility
     result['parent'] = dict(id=resource.parent.id)
+
+    zope.event.notify(AfterResourceCollectionPost(resource, request))
 
     return Response(
         json.dumps(result), status_code=201,
@@ -330,19 +235,19 @@ def collection_post(request):
 def permission(resource, request):
     request.resource_permission(PERM_READ)
 
-    # В некоторых случаях может быть удобно передать пустую строку вместо
-    # идентификатора пользователя, поэтому все довольно запутано написано.
+    # In some cases it is convenient to pass empty string instead of
+    # user's identifier, that's why it so tangled.
 
     user = request.params.get('user', '')
     user = None if user == '' else user
 
     if user is not None:
-        # Для просмотра прав произвольного пользователя нужны доп. права
+        # To see permissions for arbitrary user additional permissions are needed
         request.resource_permission(PERM_CPERM)
         user = User.filter_by(id=user).one()
 
     else:
-        # Если другого не указано, то используем текушего пользователя
+        # If it is not set otherwise, use current user
         user = request.user
 
     effective = resource.permissions(user)
@@ -361,26 +266,62 @@ def permission(resource, request):
         content_type=b'application/json')
 
 
+def quota(request):
+    quota_limit = request.env.resource.quota_limit
+    quota_resource_cls = request.env.resource.quota_resource_cls
+
+    count = None
+    if quota_limit is not None:
+        query = DBSession.query(db.func.count(Resource.id))
+        if quota_resource_cls is not None:
+            query = query.filter(Resource.cls.in_(quota_resource_cls))
+
+        with DBSession.no_autoflush:
+            count = query.scalar()
+
+    result = dict(limit=quota_limit, resource_cls=quota_resource_cls,
+                  count=count)
+
+    return Response(
+        json.dumps(result), status_code=200,
+        content_type=b'application/json')
+
+
+def search(request):
+    smap = dict(resource=ResourceSerializer, full=CompositeSerializer)
+
+    smode = request.GET.pop('serialization', None)
+    smode = smode if smode in smap else 'resource'
+    principal_id = request.GET.pop('owner_user__id', None)
+
+    scls = smap.get(smode)
+    def serialize(resource, user):
+        serializer = scls(resource, user)
+        serializer.serialize()
+        data = serializer.data
+        return {Resource.identity: data} if smode == 'resource' else data
+
+    query = Resource.query().with_polymorphic('*') \
+        .filter_by(**dict(map(
+            lambda k: (k, request.GET.get(k)),
+            (attr for attr in request.GET if hasattr(Resource, attr))))) \
+        .order_by(Resource.display_name)
+
+    if principal_id is not None:
+        owner = User.filter_by(principal_id=int(principal_id)).one()
+        query = query.filter_by(owner_user=owner)
+
+    result = list()
+    for resource in query:
+        if resource.has_permission(PERM_READ, request.user):
+            result.append(serialize(resource, request.user))
+
+    return Response(
+        json.dumps(result, cls=geojson.Encoder), status_code=200,
+        content_type=b'application/json')
+
+
 def setup_pyramid(comp, config):
-
-    def _route(route_name, route_path, **kwargs):
-        return config.add_route(
-            'resource.' + route_name,
-            '/resource/' + route_path,
-            **kwargs)
-
-    def _resource_route(route_name, route_path, **kwargs):
-        return _route(
-            route_name, route_path,
-            factory=resource_factory,
-            **kwargs)
-
-    _resource_route('child', '{id:\d+|-}/child/{child_id:\d*}',
-                    client=('id', 'child_id')) \
-        .add_view(child_get, method=r'GET') \
-        .add_view(child_put, method=(r'PUT', r'PATCH')) \
-        .add_view(child_post, method=r'POST') \
-        .add_view(child_delete, method=r'DELETE')
 
     config.add_route(
         'resource.item', '/api/resource/{id:\d+}',
@@ -398,6 +339,14 @@ def setup_pyramid(comp, config):
         'resource.permission', '/api/resource/{id}/permission',
         factory=resource_factory) \
         .add_view(permission, request_method='GET')
+
+    config.add_route(
+        'resource.quota', '/api/resource/quota') \
+        .add_view(quota, request_method='GET')
+
+    config.add_route(
+        'resource.search', '/api/resource/search/') \
+        .add_view(search, request_method='GET')
 
     config.add_tween(
         'nextgisweb.resource.api.resexc_tween_factory',

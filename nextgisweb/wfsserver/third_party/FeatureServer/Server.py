@@ -72,6 +72,9 @@ class Server (object):
 
         exceptionReport = ExceptionReport()
 
+        if "acceptversions" in params:
+            params["version"] = max(params["acceptversions"].split(","))
+
         if params.has_key("format") and params["format"] in \
                 [u'application/json', u'text/javascript', u'json', u'geojson']:
             request = GeoJSON(self)
@@ -100,6 +103,9 @@ class Server (object):
                     elif action.request == "DescribeFeatureType":
                         return request.describefeaturetype(version)
 
+                transactionResponse = TransactionResponse()
+                transactionResponse.setSummary(TransactionSummary())
+
                 for action in request.actions:
                     # Try to remove the featureserver's prefixes in name of action.layer and find the datasource name
                     ds_found = False
@@ -121,9 +127,6 @@ class Server (object):
 
                     if not ds_found:
                         raise OperationParsingFailedException(message="Can't find layer '%s'" % (action.layer, ))
-
-                    transactionResponse = TransactionResponse()
-                    transactionResponse.setSummary(TransactionSummary())
 
                     try:
                         datasource.begin()

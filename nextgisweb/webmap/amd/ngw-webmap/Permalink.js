@@ -7,88 +7,51 @@ define([
     'dojo/promise/all',
     'dijit/Dialog',
     'dijit/form/TextBox',
+    'ngw/utils/make-singleton',
     'openlayers/ol',
     'ngw-pyramid/i18n!webmap'
-], function (declare, array, lang, domConstruct, ioQuery, all, Dialog, TextBox, ol, i18n) {
-    return declare(null, {
-        constructor: function (Display) {
-            this.display = Display;
-        },
+], function (declare, array, lang, domConstruct, ioQuery, all, Dialog, TextBox,
+             MakeSingleton, ol, i18n) {
+    return {
+        getPermalink: function (display, visbleItems, options) {
+            var urlWithoutParams, visibleStyles, center, queryStr,
+                origin, pathname, queryObj;
 
-        showPermalink: function () {
-            all({
-                visbleItems: this.display.getVisibleItems(),
-                map: this.display._mapDeferred
-            }).then(
-                lang.hitch(this, function (gettingVisibleItemsResults) {
-                    this._showPermalink(gettingVisibleItemsResults.visbleItems);
-                }),
-                function (error) {
-                    console.log(error);
-                }
-            );
-        },
-
-        _showPermalink: function (visbleItems) {
-            var permalinkText = this._getPermalink(visbleItems);
-            this._showPermalinkDialog(permalinkText);
-        },
-
-        _getPermalink: function (visbleItems) {
-            var visibleStyles, center, queryStr;
+            options = options ? options : {};
 
             visibleStyles = array.map(
                 visbleItems,
-                lang.hitch(this, function (i) {
-                    return this.display.itemStore.dumpItem(i).styleId;
-                })
+                function (i) {
+                    return display.itemStore.dumpItem(i).styleId;
+                }
             );
 
-            center = ol.proj.toLonLat(this.display.map.olMap.getView().getCenter());
+            center = options.center ? options.center : ol.proj.toLonLat(display.map.olMap.getView().getCenter());
 
-            queryStr = ioQuery.objectToQuery({
-                base: this.display._baseLayer.name,
+            queryObj = {
+                base: display._baseLayer.name,
                 lon: center[0].toFixed(4),
                 lat: center[1].toFixed(4),
-                angle: this.display.map.olMap.getView().getRotation(),
-                zoom: this.display.map.olMap.getView().getZoom(),
+                angle: display.map.olMap.getView().getRotation(),
+                zoom: display.map.olMap.getView().getZoom(),
                 styles: visibleStyles.join(",")
-            });
+            };
 
-            return window.location.origin
-                + window.location.pathname
-                + "?" + queryStr;
-        },
+            if (options.additionalParams) {
+                lang.mixin(queryObj, options.additionalParams);
+            }
 
-        _showPermalinkDialog: function (permalinkText) {
-            var permalinkDialog, permalinkContent;
+            queryStr = ioQuery.objectToQuery(queryObj);
 
-            permalinkDialog = new Dialog({
-                title: i18n.gettext("Permalink"),
-                draggable: false,
-                autofocus: false,
-                onHide: function() {
-                    permalinkDialog.destroy();
-                }
-            });
+            if (options.urlWithoutParams) {
+                urlWithoutParams = options.urlWithoutParams;
+            } else {
+                origin = options.origin ? options.origin : window.location.origin;
+                pathname = options.pathname ? options.pathname : window.location.pathname;
+                urlWithoutParams = origin + pathname;
+            }
 
-            permalinkContent = new TextBox({
-                readOnly: false,
-                selectOnClick: true,
-                value: decodeURIComponent(permalinkText),
-                style: {
-                    width: "300px"
-                }
-            });
-
-            domConstruct.place(
-                permalinkContent.domNode,
-                permalinkDialog.containerNode,
-                "first"
-            );
-
-            permalinkContent.startup();
-            permalinkDialog.show();
+            return urlWithoutParams + "?" + queryStr;
         }
-    });
+    };
 });

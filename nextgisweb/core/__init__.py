@@ -1,23 +1,30 @@
 # -*- coding: utf-8 -*-
 import os
 import os.path
-from urllib import quote as urlquote
+import json
 from pkg_resources import resource_filename
 
 from sqlalchemy import create_engine
+from sqlalchemy.orm.exc import NoResultFound
+from sqlalchemy.engine.url import (
+    URL as EngineURL,
+    make_url as make_engine_url)
 
+from .. import db
 from ..package import pkginfo
 from ..component import Component
-from ..models import DBSession, Base
+from ..models import DBSession
 from ..i18n import Localizer, Translations
 
 from .util import _
+from .model import Base, Setting
 from .command import BackupCommand  # NOQA
 from .backup import BackupBase, TableBackup, SequenceBackup  # NOQA
 
 
 class CoreComponent(Component):
     identity = 'core'
+    metadata = Base.metadata
 
     def __init__(self, env, settings):
         super(CoreComponent, self).__init__(env, settings)
@@ -34,19 +41,13 @@ class CoreComponent(Component):
         setting_debug = self._settings.get('debug', 'false').lower()
         self.debug = setting_debug in ('true', 'yes', '1')
 
-        if 'system.name' not in self._settings:
-            self._settings['system.name'] = "NextGIS Web"
-
-        if 'system.full_name' not in self._settings:
-            self._settings['system.full_name'] = self.localizer().translate(
-                _("NextGIS geoinformation system"))
-
-        sa_url = 'postgresql+psycopg2://%(user)s%(password)s@%(host)s/%(name)s' % dict(
-            user=self._settings.get('database.user', 'nextgisweb'),
-            password=(':' + urlquote(self._settings['database.password'])) if 'database.password' in self._settings else '',
+        sa_url = make_engine_url(EngineURL(
+            'postgresql+psycopg2',
             host=self._settings.get('database.host', 'localhost'),
-            name=self._settings.get('database.name', 'nextgisweb'),
-        )
+            database=self._settings.get('database.name', 'nextgisweb'),
+            username=self._settings.get('database.user', 'nextgisweb'),
+            password=self._settings.get('database.password', '')
+        ))
 
         self.engine = create_engine(sa_url)
         self._sa_engine = self.engine
@@ -58,15 +59,30 @@ class CoreComponent(Component):
             conn.close()
 
         DBSession.configure(bind=self._sa_engine)
-        Base.metadata.bind = self._sa_engine
 
         self.DBSession = DBSession
-        self.Base = Base
 
-        self.metadata = Base.metadata
+        self._backup_path = self.settings.get('backup.filename')
+        self._backup_filename = self.settings.get(
+            'backup.filename', '%Y%m%d-%H%M%S')
 
-        if 'backup.filename' not in self.settings:
-            self.settings['backup.filename'] = '%y%m%d-%H%M%S'
+        self._backup_upload_bucket = self.settings.get(
+            'backup_upload.bucket', 'ngwbackup')
+        self._backup_upload_server = self.settings.get('backup_upload.server')
+        self._backup_upload_access_key = self.settings.get(
+            'backup_upload.access_key')
+        self._backup_upload_secret_key = self.settings.get(
+            'backup_upload.secret_key')
+
+    def initialize_db(self):
+        for k, v in (
+            ('system.name', 'NextGIS Web'),
+            ('system.full_name', self.localizer().translate(
+                _('NextGIS geoinformation system'))),
+            ('units', 'metric'),
+            ('degree_format', 'dd')
+        ):
+            self.init_settings(self.identity, k, self._settings.get(k, v))
 
     def backup(self):
         metadata = self.env.metadata()
@@ -76,8 +92,8 @@ class CoreComponent(Component):
         for tab in metadata.sorted_tables:
             yield TableBackup(self, tab.key)
 
-            # Ищем sequence созданные автоматически для PK
-            # по маске "table_field_seq" и добавляем их в архив
+            # Search sequence created automatically for PK
+            # using "table_field_seq" mask and add to archive
             for col in tab.columns:
                 if col.primary_key:
                     test_seq_name = tab.name + "_" + col.name + "_seq"
@@ -94,12 +110,12 @@ class CoreComponent(Component):
             yield SequenceBackup(self, seq.name)
 
     def gtsdir(self, comp):
-        """ Получить директорию хранения файлов компонента """
+        """ Get component's file storage folder """
         return os.path.join(self.settings['sdir'], comp.identity) \
             if 'sdir' in self.settings else None
 
     def mksdir(self, comp):
-        """ Создание директории для хранения файлов """
+        """ Create file storage folder """
         self.bmakedirs(self.settings['sdir'], comp.identity)
 
     def bmakedirs(self, base, path):
@@ -128,25 +144,69 @@ class CoreComponent(Component):
         self._localizer[locale] = lobj
         return lobj
 
+    def settings_exists(self, component, name):
+        return DBSession.query(db.exists().where(db.and_(
+            Setting.component == component, Setting.name == name
+        ))).scalar()
+
+    def settings_get(self, component, name):
+        try:
+            obj = Setting.filter_by(component=component, name=name).one()
+            return json.loads(obj.value)
+        except NoResultFound:
+            raise KeyError("Setting %s.%s not found!" % (component, name))
+
+    def settings_set(self, component, name, value):
+        try:
+            obj = Setting.filter_by(component=component, name=name).one()
+        except NoResultFound:
+            obj = Setting(component=component, name=name).persist()
+        obj.value = json.dumps(value)
+
+    def settings_delete(self, component, name):
+        try:
+            DBSession.delete(Setting.filter_by(
+                component=component, name=name).one())
+        except NoResultFound:
+            pass
+
+    def init_settings(self, component, name, value):
+        try:
+            self.settings_get(component, name)
+        except KeyError:
+            self.settings_set(component, name, value)
+
+    def query_stat(self):
+        result = dict()
+        try:
+            result['full_name'] = self.settings_get('core', 'system.full_name')
+        except KeyError:
+            pass
+
+        result['database_size'] = DBSession.query(db.func.pg_database_size(
+            db.func.current_database(),)).scalar()
+
+        return result
+
     settings_info = (
-        dict(key='system.name', default=u"NextGIS Web", desc=u"Название системы"),
-        dict(key='system.full_name', default=u"Геоинформационная система NextGIS", desc=u"Полное название системы"),
+        dict(key='system.name', default=u"NextGIS Web", desc=u"GIS name"),
+        dict(key='system.full_name', default=u"NextGIS Web", desc=u"Full GIS nane"),
 
-        dict(key='database.host', default='localhost', desc=u"Имя сервера БД"),
-        dict(key='database.name', default='nextgisweb', desc=u"Имя БД на сервере"),
-        dict(key='database.user', default='nextgisweb', desc=u"Имя пользователя БД"),
-        dict(key='database.password', desc=u"Пароль пользователя БД"),
+        dict(key='database.host', default='localhost', desc=u"DB server name"),
+        dict(key='database.name', default='nextgisweb', desc=u"DB name on the server"),
+        dict(key='database.user', default='nextgisweb', desc=u"DB user name"),
+        dict(key='database.password', desc=u"DB user password"),
 
-        dict(key='database.check_at_startup', desc=u"Проверять подключение при запуске"),
+        dict(key='database.check_at_startup', desc=u"Check connection of startup"),
 
-        dict(key='packages.ignore', desc=u"Не загружать перечисленные пакеты"),
-        dict(key='components.ignore', desc=u"Не загружать перечисленные компоненты"),
+        dict(key='packages.ignore', desc=u"Ignore listed packages"),
+        dict(key='components.ignore', desc=u"Ignore listed components"),
 
-        dict(key='locale.default', desc=u"Локаль, используемая по-умолчанию"),
-        dict(key='locale.available', desc=u"Доступные локали"),
-        dict(key='debug', desc=u"Дополнительный инструментарий для отладки"),
-        dict(key='sdir', desc=u"Директория для хранения данных"),
+        dict(key='locale.default', desc=u"Default locale"),
+        dict(key='locale.available', desc=u"Available locale"),
+        dict(key='debug', desc=u"Additional debug tools"),
+        dict(key='sdir', desc=u"Data storage folder"),
 
-        dict(key='permissions.disable_check.rendering', desc=u"Отключение проверки прав при рендеринге слоев"),
-        dict(key='permissions.disable_check.identify', desc=u"Отключение проверки прав при получении информации об объектах"),
+        dict(key='permissions.disable_check.rendering', desc=u"Turn off permission checking for rendering"),
+        dict(key='permissions.disable_check.identify', desc=u"Turn off permission checking for identification"),
     )

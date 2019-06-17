@@ -2,9 +2,6 @@
 define([
     "dojo/_base/declare",
     "dojo/_base/lang",
-    "dojo/_base/array",
-    "dojo/Deferred",
-    "dojo/when",
     "dojo/dom-style",
     "dojo/dom-class",
     "dojo/store/Memory",
@@ -28,9 +25,6 @@ define([
 ], function (
     declare,
     lang,
-    array,
-    Deferred,
-    when,
     domStyle,
     domClass,
     Memory,
@@ -177,7 +171,7 @@ define([
             var items = data.resmeta.items;
 
             this.store.query().forEach(function (f) {
-                var value = undefined;
+                var value;
 
                 if (f.type == "text") {
                     value = f.value;
@@ -189,7 +183,7 @@ define([
                     if (isNaN(value)) { value = 0.0; }
                 }
 
-                // Пустые ключи не записываем, хотя почему
+                // Empty keys are not stored, but why?
                 if (f.key !== "") { items[f.key] = value; }
             });
 

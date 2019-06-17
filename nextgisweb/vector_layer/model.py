@@ -1,15 +1,13 @@
 # -*- coding: utf-8 -*-
 from __future__ import unicode_literals
 
+import json
 import uuid
 import types
 import zipfile
 import ctypes
-import operator
-import osgeo
 
-from datetime import datetime
-from distutils.version import LooseVersion
+from datetime import datetime, time, date
 from zope.interface import implements
 from osgeo import ogr, osr, gdal
 
@@ -41,12 +39,17 @@ from ..models import declarative_base, DBSession
 from ..layer import SpatialLayerMixin, IBboxLayer
 
 from ..feature_layer import (
+    gdal_gt_19,
+    gdal_gt_20,
+    gdal_gt_22,
     Feature,
     FeatureSet,
     LayerField,
     LayerFieldsMixin,
     GEOM_TYPE,
+    GEOM_TYPE_OGR,
     FIELD_TYPE,
+    FIELD_TYPE_OGR,
     IFeatureLayer,
     IWritableFeatureLayer,
     IFeatureQuery,
@@ -60,39 +63,19 @@ from .util import _
 
 GEOM_TYPE_DB = ('POINT', 'LINESTRING', 'POLYGON',
                 'MULTIPOINT', 'MULTILINESTRING', 'MULTIPOLYGON')
-GEOM_TYPE_OGR = (
-    ogr.wkbPoint,
-    ogr.wkbLineString,
-    ogr.wkbPolygon,
-    ogr.wkbMultiPoint,
-    ogr.wkbMultiLineString,
-    ogr.wkbMultiPolygon,
-    ogr.wkbPoint25D,
-    ogr.wkbLineString25D,
-    ogr.wkbPolygon25D,
-    ogr.wkbMultiPoint25D,
-    ogr.wkbMultiLineString25D,
-    ogr.wkbMultiPolygon25D)
 GEOM_TYPE_DISPLAY = (_("Point"), _("Line"), _("Polygon"),
                      _("Multipoint"), _("Multiline"), _("Multipolygon"))
 
 FIELD_TYPE_DB = (
     db.Integer,
+    db.BigInteger,
     db.Float,
     db.Unicode,
     db.Date,
     db.Time,
     db.DateTime)
 
-FIELD_TYPE_OGR = (
-    ogr.OFTInteger,
-    ogr.OFTReal,
-    ogr.OFTString,
-    ogr.OFTDate,
-    ogr.OFTTime,
-    ogr.OFTDateTime)
-
-FIELD_FORBIDDEN_NAME = ("id", "type", "source")
+FIELD_FORBIDDEN_NAME = ("id", "geom")
 
 _GEOM_OGR_2_TYPE = dict(zip(GEOM_TYPE_OGR, GEOM_TYPE.enum * 2))
 _GEOM_TYPE_2_DB = dict(zip(GEOM_TYPE.enum, GEOM_TYPE_DB))
@@ -105,11 +88,12 @@ Base = declarative_base()
 
 class FieldDef(object):
 
-    def __init__(self, key, keyname, datatype, uuid):
+    def __init__(self, key, keyname, datatype, uuid, display_name=None):
         self.key = key
         self.keyname = keyname
         self.datatype = datatype
         self.uuid = uuid
+        self.display_name = display_name
 
 
 class TableInfo(object):
@@ -124,22 +108,76 @@ class TableInfo(object):
     def from_ogrlayer(cls, ogrlayer, srs_id, strdecode):
         self = cls(srs_id)
 
-        self.geometry_type = _GEOM_OGR_2_TYPE[ogrlayer.GetGeomType()]
+        ltype = ogrlayer.GetGeomType() & (~ogr.wkb25DBit)
+        self.geometry_type = _GEOM_OGR_2_TYPE[ltype]
+        self.accepted_gtype = [ltype, ]
+
+        if ltype in (ogr.wkbPoint, ogr.wkbLineString, ogr.wkbPolygon):
+            for feature in ogrlayer:
+                geom = feature.GetGeometryRef()
+                gtype = geom.GetGeometryType() & (~ogr.wkb25DBit)
+                if ltype != gtype and (
+                    (ltype == ogr.wkbPoint and gtype == ogr.wkbMultiPoint) or
+                    (ltype == ogr.wkbLineString and gtype == ogr.wkbMultiLineString) or
+                    (ltype == ogr.wkbPolygon and gtype == ogr.wkbMultiPolygon)
+                ):
+                    self.geometry_type = _GEOM_OGR_2_TYPE[gtype]
+                    self.accepted_gtype.append(gtype)
+                    break
+
+            ogrlayer.ResetReading()
+
         self.fields = []
 
         defn = ogrlayer.GetLayerDefn()
         for i in range(defn.GetFieldCount()):
             fld_defn = defn.GetFieldDefn(i)
-            fld_name = fld_defn.GetNameRef()
+
+            # TODO: Fix invalid field names as done for attributes.
+            fld_name = strdecode(fld_defn.GetNameRef())
             if fld_name.lower() in FIELD_FORBIDDEN_NAME:
                 raise VE(_("Field name is forbidden: '%s'. Please remove or rename it.") % fld_name)
+
+            fld_type = None
+            fld_type_ogr = fld_defn.GetType()
+
+            if fld_type_ogr in (ogr.OFTRealList,
+                                ogr.OFTStringList,
+                                ogr.OFTIntegerList,
+                                ogr.OFTInteger64List if gdal_gt_20 else None):
+                fld_type = FIELD_TYPE.STRING
+
+            if fld_type is None:
+                try:
+                    fld_type = _FIELD_TYPE_2_ENUM[fld_type_ogr]
+                except KeyError:
+                    raise VE(_("Unsupported field type: %r.") %
+                             fld_defn.GetTypeName())
 
             uid = str(uuid.uuid4().hex)
             self.fields.append(FieldDef(
                 'fld_%s' % uid,
                 fld_name,
-                _FIELD_TYPE_2_ENUM[fld_defn.GetType()],
+                fld_type,
                 uid
+            ))
+
+        return self
+
+    @classmethod
+    def from_fields(cls, fields, srs_id, geometry_type):
+        self = cls(srs_id)
+        self.geometry_type = geometry_type
+        self.fields = []
+
+        for fld in fields:
+            uid = str(uuid.uuid4().hex)
+            self.fields.append(FieldDef(
+                'fld_%s' % uid,
+                fld.get('keyname'),
+                fld.get('datatype'),
+                uid,
+                fld.get('display_name')
             ))
 
         return self
@@ -171,10 +209,13 @@ class TableInfo(object):
 
         layer.fields = []
         for f in self.fields:
+            if f.display_name is None:
+                f.display_name = f.keyname
+
             layer.fields.append(VectorLayerField(
                 keyname=f.keyname,
                 datatype=f.datatype,
-                display_name=f.keyname,
+                display_name=f.display_name,
                 fld_uuid=f.uuid
             ))
 
@@ -190,8 +231,9 @@ class TableInfo(object):
         table = db.Table(
             tablename if tablename else ('lvd_' + str(uuid.uuid4().hex)),
             metadata, db.Column('id', db.Integer, primary_key=True),
-            db.Column('geom', ga.Geometry(dimension=2,
-                geometry_type=geom_fldtype, srid=self.srs_id)),
+            db.Column('geom', ga.Geometry(
+                dimension=2, srid=self.srs_id,
+                geometry_type=geom_fldtype)),
             *map(lambda (fld): db.Column(fld.key, _FIELD_TYPE_2_DB[
                 fld.datatype]), self.fields)
         )
@@ -207,62 +249,89 @@ class TableInfo(object):
         target_osr = osr.SpatialReference()
         target_osr.ImportFromEPSG(self.srs_id)
 
+        ltype = ogrlayer.GetGeomType() & (~ogr.wkb25DBit)
         transform = osr.CoordinateTransformation(source_osr, target_osr)
 
-        feature = ogrlayer.GetNextFeature()
-        fid = 0
-        while feature:
-            fid += 1
+        for fid, feature in enumerate(ogrlayer):
             geom = feature.GetGeometryRef()
 
-            # Приведение 25D геометрий к 2D
-            if geom.GetGeometryType() in (
-                ogr.wkbPoint25D,
-                ogr.wkbLineString25D,
-                ogr.wkbPolygon25D,
-                ogr.wkbMultiPoint25D,
-                ogr.wkbMultiLineString25D,
-                ogr.wkbMultiPolygon25D,
-            ):
+            # Bring 25D geometries to 2D
+            if geom.GetGeometryType() & ogr.wkb25DBit:
                 geom.FlattenTo2D()
 
             gtype = geom.GetGeometryType()
-            ltype = ogrlayer.GetGeomType() & (~ogr.wkb25DBit)
-            if gtype != ltype:
-                raise ValidationError(_("Geometry type (%s) does not match column type (%s).") % (
-                    GEOM_TYPE_DISPLAY[gtype-1],
-                    GEOM_TYPE_DISPLAY[ltype-1]))
+            if gtype not in self.accepted_gtype:
+                raise ValidationError(_(
+                    "Geometry type (%s) does not match column type (%s).") % (
+                    GEOM_TYPE_DISPLAY[gtype - 1],
+                    GEOM_TYPE_DISPLAY[ltype - 1]))
 
             geom.Transform(transform)
+
+            if (
+                self.geometry_type in (
+                    GEOM_TYPE.MULTIPOINT,
+                    GEOM_TYPE.MULTILINESTRING,
+                    GEOM_TYPE.MULTIPOLYGON)
+            ):
+                if gtype == ogr.wkbPoint:
+                    geom = ogr.ForceToMultiPoint(geom)
+                elif gtype == ogr.wkbLineString:
+                    geom = ogr.ForceToMultiLineString(geom)
+                elif gtype == ogr.wkbPolygon:
+                    geom = ogr.ForceToMultiPolygon(geom)
 
             fld_values = dict()
             for i in range(feature.GetFieldCount()):
                 fld_type = feature.GetFieldDefnRef(i).GetType()
 
-                if not feature.IsFieldSet(i):
+                if (not feature.IsFieldSet(i) or
+                        (gdal_gt_22 and feature.IsFieldNull(i))):
                     fld_value = None
                 elif fld_type == ogr.OFTInteger:
                     fld_value = feature.GetFieldAsInteger(i)
+                elif gdal_gt_20 and fld_type == ogr.OFTInteger64:
+                    fld_value = feature.GetFieldAsInteger64(i)
                 elif fld_type == ogr.OFTReal:
                     fld_value = feature.GetFieldAsDouble(i)
-                elif fld_type in [ogr.OFTDate, ogr.OFTTime, ogr.OFTDateTime]:
-                    fld_value = datetime(*feature.GetFieldAsDateTime(i))
+                elif fld_type == ogr.OFTDate:
+                    year, month, day = feature.GetFieldAsDateTime(i)[0:3]
+                    fld_value = date(year, month, day)
+                elif fld_type == ogr.OFTTime:
+                    hour, minute, second = feature.GetFieldAsDateTime(i)[3:6]
+                    fld_value = time(hour, minute, int(second))
+                elif fld_type == ogr.OFTDateTime:
+                    year, month, day, hour, minute, second, tz = \
+                        feature.GetFieldAsDateTime(i)
+                    fld_value = datetime(year, month, day,
+                                         hour, minute, int(second))
+                elif fld_type == ogr.OFTIntegerList:
+                    fld_value = json.dumps(feature.GetFieldAsIntegerList(i))
+                elif gdal_gt_20 and fld_type == ogr.OFTInteger64List:
+                    fld_value = json.dumps(feature.GetFieldAsInteger64List(i))
+                elif fld_type == ogr.OFTRealList:
+                    fld_value = json.dumps(feature.GetFieldAsDoubleList(i))
+                elif fld_type == ogr.OFTStringList:
+                    # TODO: encoding
+                    fld_value = json.dumps(feature.GetFieldAsStringList(i))
                 elif fld_type == ogr.OFTString:
                     try:
                         fld_value = strdecode(feature.GetFieldAsString(i))
                     except UnicodeDecodeError:
-                        raise ValidationError(_("Unable to decode string value of feature #%(feat)d attribute #%(attr)d.") % dict(
-                            feat=fid, attr=i))  # NOQA
+                        raise ValidationError(_(
+                            "It seems like declared and actual attributes "
+                            "encodings do not match. Unable to decode "
+                            "attribute #%(attr)d of feature #%(feat)d. "
+                            "Try declaring different encoding.") % dict(
+                            feat=fid, attr=i))
 
-                fld_values[self[feature.GetFieldDefnRef(i).GetNameRef()].key] \
-                    = fld_value
+                fld_name = strdecode(feature.GetFieldDefnRef(i).GetNameRef())
+                fld_values[self[fld_name].key] = fld_value
 
             obj = self.model(fid=fid, geom=ga.elements.WKTElement(
                 str(geom), srid=self.srs_id), **fld_values)
 
             DBSession.add(obj)
-
-            feature = ogrlayer.GetNextFeature()
 
 
 class VectorLayerField(Base, LayerField):
@@ -318,6 +387,16 @@ class VectorLayer(Base, Resource, SpatialLayerMixin, LayerFieldsMixin):
 
         self.tableinfo = tableinfo
 
+    def setup_from_fields(self, fields):
+        tableinfo = TableInfo.from_fields(
+            fields, self.srs.id, self.geometry_type)
+        tableinfo.setup_layer(self)
+
+        tableinfo.setup_metadata(tablename=self._tablename)
+        tableinfo.metadata.create_all(bind=DBSession.connection())
+
+        self.tableinfo = tableinfo
+
     def load_from_ogr(self, ogrlayer, strdecode):
         self.tableinfo.load_from_ogr(ogrlayer, strdecode)
 
@@ -358,8 +437,8 @@ class VectorLayer(Base, Resource, SpatialLayerMixin, LayerFieldsMixin):
             if f.keyname in feature.fields:
                 setattr(obj, f.key, feature.fields[f.keyname])
 
-        # FIXME: В случае отсутствия геометрии не пытаемся ее записать. Это
-        # не позволит записать пустую геометрию, но это и не нужно пока.
+        # FIXME: Don't try to write geometry if it exists.
+        # This will not let to write empty geometry, but it is not needed yet.
 
         if feature.geom is not None:
             obj.geom = ga.elements.WKTElement(
@@ -370,12 +449,12 @@ class VectorLayer(Base, Resource, SpatialLayerMixin, LayerFieldsMixin):
         self.after_feature_update.fire(resource=self, feature=feature)
 
     def feature_create(self, feature):
-        """Вставляет в БД новый объект, описание которого дается в feature
+        """Insert new object to DB which is described in feature
 
-        :param feature: описание объекта
+        :param feature: object description
         :type feature:  Feature
 
-        :return:    ID вставленного объекта
+        :return:    inserted object ID
         """
         self.before_feature_create.fire(resource=self, feature=feature)
 
@@ -399,9 +478,9 @@ class VectorLayer(Base, Resource, SpatialLayerMixin, LayerFieldsMixin):
         return obj.id
 
     def feature_delete(self, feature_id):
-        """Удаляет запись с заданным id
+        """Remove record with id
 
-        :param feature_id: идентификатор записи
+        :param feature_id: record id
         :type feature_id:  int or bigint
         """
         self.before_feature_delete.fire(resource=self, feature_id=feature_id)
@@ -415,7 +494,7 @@ class VectorLayer(Base, Resource, SpatialLayerMixin, LayerFieldsMixin):
         self.after_feature_delete.fire(resource=self, feature_id=feature_id)
 
     def feature_delete_all(self):
-        """Удаляет все записи слоя"""
+        """Remove all records from a layer"""
         self.before_all_feature_delete.fire(resource=self)
 
         tableinfo = TableInfo.from_layer(self)
@@ -428,7 +507,7 @@ class VectorLayer(Base, Resource, SpatialLayerMixin, LayerFieldsMixin):
     # IBboxLayer implementation:
     @property
     def extent(self):
-        """Возвращает охват слоя
+        """Return layer's extent
         """
         st_transform = func.st_transform
         st_extent = func.st_extent
@@ -480,8 +559,8 @@ def _vector_layer_listeners(table):
 _vector_layer_listeners(VectorLayer.__table__)
 
 
-# Инициализация БД использует table.tometadata(), однако
-# SA не копирует подписки на события в этом случае.
+# DB initialization uses table.tometadata(), however
+# SA doesn't copy event subscriptions in this case.
 
 def tometadata(self, metadata):
     result = db.Table.tometadata(self, metadata)
@@ -493,7 +572,6 @@ VectorLayer.__table__.tometadata = types.MethodType(
 
 
 def _set_encoding(encoding):
-    gdal_gt_19 = LooseVersion(osgeo.__version__) >= LooseVersion('1.9')
 
     class encoding_section(object):
 
@@ -501,15 +579,15 @@ def _set_encoding(encoding):
             self.encoding = encoding
 
             if self.encoding and gdal_gt_19:
-                # Для GDAL 1.9 и выше пытаемся установить SHAPE_ENCODING
-                # через ctypes и libgdal
+                # For GDAL 1.9 and higher try to set SHAPE_ENCODING
+                # through ctypes and libgdal
 
-                # Загружаем библиотеку только в том случае,
-                # если нам нужно перекодировать
+                # Load library only if we need
+                # to recode
                 self.lib = ctypes.CDLL('libgdal.so')
 
-                # Обертки для функций cpl_conv.h
-                # см. http://www.gdal.org/cpl__conv_8h.html
+                # cpl_conv.h functions wrappers
+                # see http://www.gdal.org/cpl__conv_8h.html
 
                 # CPLGetConfigOption
                 self.get_option = self.lib.CPLGetConfigOption
@@ -522,24 +600,24 @@ def _set_encoding(encoding):
                 self.strdup.restype = ctypes.c_char_p
 
                 # CPLSetThreadLocalConfigOption
-                # Используем именно thread local вариант функции, чтобы
-                # минимизировать побочные эффекты.
+                # Use thread local function
+                # to minimize side effects.
                 self.set_option = self.lib.CPLSetThreadLocalConfigOption
                 self.set_option.argtypes = [ctypes.c_char_p, ctypes.c_char_p]
                 self.set_option.restype = None
 
             elif encoding:
-                # Для други версий GDAL вернем функцию обертку, которая
-                # умеет декодировать строки в unicode, см. __enter__
+                # For other version of GDAL return function wrapper
+                # that can decode string to unicode, see __enter__
                 pass
 
         def __enter__(self):
 
             def strdecode(x):
                 if len(x) >= 254:
-                    # Костылек для косячка с обрезкой по 254 - 255 байтам
-                    # юникодных строк. До тех пор пока не получится
-                    # декодировать строку откусываем по байту справа.
+                    # Cludge to fix 254 - 255 byte unicode string cut off
+                    # Until we can decode
+                    # cut a byte on the right
 
                     while True:
                         try:
@@ -551,19 +629,19 @@ def _set_encoding(encoding):
                 return x.decode(self.encoding)
 
             if self.encoding and gdal_gt_19:
-                # Для GDAL 1.9 устанавливаем значение SHAPE_ENCODING
+                # For GDAL 1.9 set SHAPE_ENCODING value
 
-                # Оставим копию текущего значения себе
+                # Keep copy of the current value
                 tmp = self.get_option('SHAPE_ENCODING', None)
                 self.old_value = self.strdup(tmp)
 
-                # Установим новое
+                # Set new value
                 self.set_option('SHAPE_ENCODING', '')
 
                 return strdecode
 
             elif self.encoding:
-                # Функция обертка для других версий GDAL
+                # Wrapper for other GDAL versions
                 return strdecode
 
             return lambda (x): x
@@ -571,7 +649,7 @@ def _set_encoding(encoding):
         def __exit__(self, type, value, traceback):
 
             if self.encoding and gdal_gt_19:
-                # Возвращаем на место старое значение
+                # Return old value
                 self.set_option('SHAPE_ENCODING', self.old_value)
 
     return encoding_section(encoding)
@@ -599,12 +677,10 @@ class _source_attr(SP):
         if ogrlayer.GetSpatialRef() is None:
             raise VE(_("Layer doesn't contain coordinate system information."))
 
-        feat = ogrlayer.GetNextFeature()
-        while feat:
+        for feat in ogrlayer:
             geom = feat.GetGeometryRef()
             if geom is None:
                 raise VE(_("Feature #%d doesn't contains geometry.") % feat.GetFID())
-            feat = ogrlayer.GetNextFeature()
 
         ogrlayer.ResetReading()
 
@@ -636,7 +712,7 @@ class _source_attr(SP):
 
             drivername = ogrds.GetDriver().GetName()
 
-            if drivername not in ('ESRI Shapefile', 'GeoJSON'):
+            if drivername not in ('ESRI Shapefile', 'GeoJSON', 'KML'):
                 raise VE(_("Unsupport OGR driver: %s.") % drivername)
 
             ogrlayer = self._ogrds(ogrds)
@@ -649,6 +725,15 @@ class _source_attr(SP):
 
         finally:
             pass
+
+
+class _fields_attr(SP):
+
+    def setter(self, srlzr, value):
+        srlzr.obj.tbl_uuid = uuid.uuid4().hex
+
+        with DBSession.no_autoflush:
+            srlzr.obj.setup_from_fields(value)
 
 
 class _geometry_type_attr(SP):
@@ -678,6 +763,7 @@ class VectorLayerSerializer(Serializer):
     geometry_type = _geometry_type_attr(read=P_DSS_READ, write=P_DSS_WRITE)
 
     source = _source_attr(read=None, write=P_DS_WRITE)
+    fields = _fields_attr(read=None, write=P_DS_WRITE)
 
 
 class FeatureQueryBase(object):
@@ -703,6 +789,7 @@ class FeatureQueryBase(object):
 
         self._filter = None
         self._filter_by = None
+        self._filter_sql = None
         self._like = None
         self._intersects = None
 
@@ -733,6 +820,12 @@ class FeatureQueryBase(object):
 
     def filter_by(self, **kwargs):
         self._filter_by = kwargs
+
+    def filter_sql(self, *args):
+        if len(args) > 0 and isinstance(args[0], list):
+            self._filter_sql = args[0]
+        else:
+            self._filter_sql = args
 
     def order_by(self, *args):
         self._order_by = args
@@ -798,11 +891,38 @@ class FeatureQueryBase(object):
         if self._filter:
             l = []
             for k, o, v in self._filter:
-                op = getattr(operator, o)
+                supported_operators = ('gt', 'lt', 'ge', 'le', 'eq', 'ne', 'like', 'ilike')
+                if o not in supported_operators:
+                    raise ValueError(
+                        "Invalid operator '%s'. Only %r are supported." % (
+                            o, supported_operators))
+
+                if o == 'like':
+                    o = 'like_op'
+
+                if o == 'ilike':
+                    o = 'ilike_op'
+
+                op = getattr(db.sql.operators, o)
                 if k == 'id':
                     l.append(op(table.columns.id, v))
                 else:
                     l.append(op(table.columns[tableinfo[k].key], v))
+
+            where.append(db.and_(*l))
+
+        if self._filter_sql:
+            l = []
+            for _filter_sql_item in self._filter_sql:
+                if len(_filter_sql_item) == 3:
+                    table_column, op, val = _filter_sql_item
+                    if table_column == 'id':
+                        l.append(op(table.columns.id, val))
+                    else:
+                        l.append(op(table.columns[tableinfo[table_column].key], val))
+                elif len(_filter_sql_item) == 4:
+                    table_column, op, val1, val2 = _filter_sql_item
+                    l.append(op(table.columns[tableinfo[table_column].key], val1, val2))
 
             where.append(db.and_(*l))
 

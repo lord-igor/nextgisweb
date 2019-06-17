@@ -21,27 +21,28 @@ from .util import _
 
 __all__ = ['resource_factory', ]
 
+PERM_CREATE = ResourceScope.create
 PERM_READ = ResourceScope.read
+PERM_UPDATE = ResourceScope.update
 PERM_DELETE = ResourceScope.delete
 PERM_CPERMISSIONS = ResourceScope.change_permissions
 PERM_MCHILDREN = ResourceScope.manage_children
 
 
 def resource_factory(request):
-    # TODO: Хотелось бы использовать первый ключ, но этого не получится,
-    # поскольку matchdiсt не сохраняет порядок ключей.
+    # TODO: We'd like to use first key, but can't
+    # as matchdiсt doesn't save keys order.
 
     if request.matchdict['id'] == '-':
         return None
 
-    # Вначале загружаем ресурс базового класса
+    # First, load base class resource
     try:
         base = Resource.filter_by(id=request.matchdict['id']).one()
     except NoResultFound:
         raise httpexceptions.HTTPNotFound()
 
-    # После чего загружаем ресурс того класса,
-    # к которому этот ресурс и относится
+    # Second, load resource of it's class
     obj = Resource.query().with_polymorphic(
         Resource.registry[base.cls]).filter_by(
         id=request.matchdict['id']).one()
@@ -65,7 +66,7 @@ def objjson(request):
                 objjson=serializer.data)
 
 
-# TODO: Перенести в API и избавиться от json=True
+# TODO: Move to API and get rid of json=True
 @viewargs(renderer='json', json=True)
 def schema(request):
     resources = dict()
@@ -90,6 +91,7 @@ def schema(request):
     return dict(resources=resources, scopes=scopes)
 
 
+# TODO: Remove deprecated useless page
 @viewargs(renderer='nextgisweb:resource/template/tree.mako')
 def tree(request):
     obj = request.context
@@ -98,42 +100,9 @@ def tree(request):
         subtitle=_("Resource tree"))
 
 
-@viewargs(renderer='json', json=True)
-def store(request):
-    oid = request.matchdict['id']
-    if oid == '':
-        oid = None
-
-    query = Resource.query().with_polymorphic('*')
-    if oid is not None:
-        query = query.filter_by(id=oid)
-
-    for k in ('id', 'parent_id'):
-        if request.GET.get(k):
-            query = query.filter(getattr(Resource, k) == request.GET.get(k))
-
-    result = []
-
-    for res in query:
-        if not res.has_permission(PERM_READ, request.user):
-            continue
-
-        serializer = ResourceSerializer(res, request.user)
-        serializer.serialize()
-        itm = serializer.data
-
-        if oid is not None:
-            return itm
-        else:
-            result.append(itm)
-
-        result.sort(key=lambda res: res['display_name'])
-
-    return result
-
-
 @viewargs(renderer='nextgisweb:resource/template/composite_widget.mako')
 def create(request):
+    request.resource_permission(PERM_MCHILDREN)
     return dict(obj=request.context, subtitle=_("Create resource"), maxheight=True,
                 query=dict(operation='create', cls=request.GET.get('cls'),
                            parent=request.context.id))
@@ -141,12 +110,14 @@ def create(request):
 
 @viewargs(renderer='nextgisweb:resource/template/composite_widget.mako')
 def update(request):
+    request.resource_permission(PERM_UPDATE)
     return dict(obj=request.context, subtitle=_("Update resource"), maxheight=True,
                 query=dict(operation='update', id=request.context.id))
 
 
 @viewargs(renderer='nextgisweb:resource/template/composite_widget.mako')
 def delete(request):
+    request.resource_permission(PERM_DELETE)
     return dict(obj=request.context, subtitle=_("Delete resource"), maxheight=True,
                 query=dict(operation='delete', id=request.context.id))
 
@@ -157,12 +128,6 @@ def widget(request):
     resid = request.GET.get('id', None)
     clsid = request.GET.get('cls', None)
     parent_id = request.GET.get('parent', None)
-
-    def url(parent_id, child_id=''):
-        return request.route_url(
-            'resource.child',
-            id=parent_id,
-            child_id=child_id)
 
     if operation == 'create':
         if resid is not None or clsid is None or parent_id is None:
@@ -240,8 +205,6 @@ def setup_pyramid(comp, config):
 
     _resource_route('tree', '{id:\d+}/tree', client=('id', )).add_view(tree)
 
-    _route('store', 'store/{id:\d*}', client=('id', )).add_view(store)
-
     _route('widget', 'widget', client=()).add_view(widget)
 
     # CRUD
@@ -254,7 +217,7 @@ def setup_pyramid(comp, config):
 
     permalinker(Resource, 'resource.show')
 
-    # Секции
+    # Sections
 
     Resource.__psection__ = PageSections()
 
@@ -281,18 +244,52 @@ def setup_pyramid(comp, config):
         title=_("User permissions"),
         template='nextgisweb:resource/template/section_permission.mako')
 
-    # Действия
+    # Actions
 
-    class AddMenu(DynItem):
+    class ResourceMenu(DynItem):
         def build(self, args):
+            permissions = args.obj.permissions(args.request.user)
             for ident, cls in Resource.registry._dict.iteritems():
+                if ident in comp.disabled_cls:
+                    continue
+
                 if not cls.check_parent(args.obj):
+                    continue
+
+                # Is current user has permission to manage resource children?
+                if PERM_MCHILDREN not in permissions:
+                    continue
+
+                # Is current user has permission to create child resource?
+                # TODO: Fix SAWarning: Object of type ... not in session,
+                # add operation along 'Resource.children' will not proceed
+                child = cls(parent=args.obj, owner_user=args.request.user)
+                if not child.has_permission(PERM_CREATE, args.request.user):
                     continue
 
                 yield Link(
                     'create/%s' % ident,
                     cls.cls_display_name,
-                    self._url(ident))
+                    self._url(ident),
+                    cls.identity)
+
+            if PERM_UPDATE in permissions:
+                yield Link(
+                    'operation/update', _("Update"),
+                    lambda args: args.request.route_url(
+                        'resource.update', id=args.obj.id))
+
+            if PERM_DELETE in permissions:
+                yield Link(
+                    'operation/delete', _("Delete"),
+                    lambda args: args.request.route_url(
+                        'resource.delete', id=args.obj.id))
+
+            if PERM_READ in permissions:
+                yield Link(
+                    'extra/json', _("JSON view"),
+                    lambda args: args.request.route_url(
+                        'resource.json', id=args.obj.id))
 
         def _url(self, cls):
             return lambda (args): args.request.route_url(
@@ -301,30 +298,8 @@ def setup_pyramid(comp, config):
 
     Resource.__dynmenu__ = DynMenu(
         Label('create', _("Create resource")),
-
-        AddMenu(),
-
         Label('operation', _("Action")),
-
-        Link(
-            'operation/update', _("Update"),
-            lambda args: args.request.route_url(
-                'resource.update', id=args.obj.id)),
-
-        Link(
-            'operation/delete', _("Delete"),
-            lambda args: args.request.route_url(
-                'resource.delete', id=args.obj.id)),
-
         Label('extra', _("Extra")),
 
-        Link(
-            'extra/tree', _("Resource tree"),
-            lambda args: args.request.route_url(
-                'resource.tree', id=args.obj.id)),
-
-        Link(
-            'extra/json', _("JSON view"),
-            lambda args: args.request.route_url(
-                'resource.json', id=args.obj.id)),
+        ResourceMenu(),
     )

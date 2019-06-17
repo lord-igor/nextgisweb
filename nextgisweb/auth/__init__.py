@@ -1,9 +1,11 @@
 # -*- coding: utf-8 -*-
 from __future__ import unicode_literals, print_function, absolute_import
-from pyramid.security import authenticated_userid
 from sqlalchemy.orm.exc import NoResultFound
+from pyramid.httpexceptions import HTTPForbidden
 
 from ..component import Component
+from ..models import DBSession
+from .. import db
 
 from .models import Base, Principal, User, Group, UserDisabled
 from . import command # NOQA
@@ -60,7 +62,7 @@ class AuthComponent(Component):
     def setup_pyramid(self, config):
 
         def user(request):
-            user_id = authenticated_userid(request)
+            user_id = request.authenticated_userid
             if user_id:
                 user = User.filter_by(id=user_id).one()
                 if user.disabled:
@@ -69,15 +71,25 @@ class AuthComponent(Component):
             else:
                 return User.filter_by(keyname='guest').one()
 
-        config.set_request_property(user, reify=True)
+        def require_administrator(request):
+            if not request.user.is_administrator:
+                raise HTTPForbidden(
+                    "Membership in group 'administrators' required!")
+
+        config.add_request_method(user, reify=True)
+        config.add_request_method(require_administrator)
 
         from . import views, api
         views.setup_pyramid(self, config)
         api.setup_pyramid(self, config)
 
+    def query_stat(self):
+        query_user = DBSession.query(db.func.count(User.id))
+        return dict(user_count=query_user.scalar())
+
     def initialize_user(self, keyname, display_name, **kwargs):
-        """ Проверяет наличие в БД пользователя с keyname и в случае
-        отсутствия создает его с параметрами kwargs """
+        """ Checks is user with keyname exists in DB and
+        if not, creates it with kwargs parameters """
 
         try:
             obj = User.filter_by(keyname=keyname).one()
@@ -90,8 +102,8 @@ class AuthComponent(Component):
         return obj
 
     def initialize_group(self, keyname, display_name, **kwargs):
-        """ Проверяет наличие в БД группы пользователей с keyname и в случае
-        отсутствия создает ее с параметрами kwargs """
+        """ Checks is usergroup with keyname exists in DB and
+        if not, creates it with kwargs parameters """
 
         try:
             obj = Group.filter_by(keyname=keyname).one()
@@ -105,6 +117,8 @@ class AuthComponent(Component):
 
     settings_info = (
         dict(key='register', description="Allow user registration"),
+        dict(key='login_route_name', description="Name of route for login page (default: 'auth.login')"),
+        dict(key='logout_route_name', description="Name of route for logout page (default: 'auth.logout')"),
     )
 
 

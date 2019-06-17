@@ -8,7 +8,6 @@ define([
     "dijit/_TemplatedMixin",
     "dijit/_WidgetsInTemplateMixin",
     "ngw-resource/serialize",
-    "ngw-resource/ResourceStore",
     "ngw-pyramid/i18n!webmap",
     "ngw-pyramid/hbs-i18n",
     // resource
@@ -26,7 +25,6 @@ define([
     _TemplatedMixin,
     _WidgetsInTemplateMixin,
     serialize,
-    ResourceStore,
     i18n,
     hbsI18n,
     template
@@ -39,7 +37,7 @@ define([
        postCreate: function () {
             this.inherited(arguments);
 
-            // Выбор слоя и получение его охвата
+            // Layer selection and get its extent
             this.btnSetExtentFromLayer.on("click",
                 lang.hitch(this, function () {
                     this.layerPicker.pick().then(lang.hitch(this,

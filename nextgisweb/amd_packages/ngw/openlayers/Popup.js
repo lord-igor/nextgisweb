@@ -1,6 +1,9 @@
 define([
     "dojo/dom-construct",
-    "openlayers/ol"
+    "openlayers/ol",
+
+    //templates
+    "xstyle/css!./resource/Popup.css"
 ], function (
     domConstruct,
     ol
@@ -22,6 +25,7 @@ define([
         }, this.container);
 
         this.contentDiv = domConstruct.create("div", {
+            class: "ngwPopup__content",
             style: {
                 "width": options.size[0] + "px",
                 "height": options.size[1] + "px",
@@ -29,19 +33,22 @@ define([
             }
         }, this.subcontainer, "last");
 
-        // Заголовок
-        this.titleDiv = domConstruct.create("div", {
-            innerHTML: this.title ? this.title : "&nbsp;",
-            style: "background-color: #eee; margin: 1px 1px 2px 1px;"
+        // Header
+        this.titleBar = domConstruct.create("div", {
+            class: "ngwPopup__title",
         }, this.subcontainer, "first");
 
-        // Кнопка закрытия в заголовке
+        this.titleSpan = domConstruct.create("span", {
+            innerHTML: this.title ? this.title : "&nbsp;",
+        }, this.titleBar, "last");
+
+        // Close button in the header
         this._closeSpan = domConstruct.create("span", {
             class: "dijitDialogCloseIcon",
             style: "margin-top: 2px"
-        }, this.titleDiv, "last");
+        }, this.titleBar, "last");
 
-        // Соединительная стрелка
+        // Connecting arrow
         this._connectorDiv = domConstruct.create("div", {
             class: "dijitTooltipConnector"
         }, this.container, 'first');
@@ -57,6 +64,10 @@ define([
     };
 
     ol.inherits(Popup, ol.Overlay);
+
+    Popup.prototype.setTitle = function (title) {
+        this.titleSpan.innerHTML = title;
+    };
 
     return Popup;
 

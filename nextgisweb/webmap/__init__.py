@@ -23,13 +23,13 @@ class WebMapComponent(Component):
     def initialize(self):
         super(WebMapComponent, self).initialize()
 
-        # Настройки по умолчанию
+        # Default settings
         if 'basemaps' not in self.settings:
             self.settings['basemaps'] = resource_filename(
                 'nextgisweb', 'webmap/basemaps.json')
 
         self.settings['identify_radius'] = int(self.settings.get(
-            'identify_radius', 3))
+            'identify_radius', 10))
         self.settings['popup_width'] = int(self.settings.get(
             'popup_width', 300))
         self.settings['popup_height'] = int(self.settings.get(
@@ -37,8 +37,8 @@ class WebMapComponent(Component):
 
     @require('resource', 'auth')
     def initialize_db(self):
-        # Создаем веб-карту по-умолчанию, если в корне нет ни одной.
-        # TODO: Возможность отключать такое поведение через настройки
+        # Create a default web-map if there are none
+        # TODO: option to turn this off through settings
         if WebMap.filter_by(parent_id=0).first() is None:
             dispname = self.env.core.localizer().translate(_("Main web map"))
             WebMap(parent_id=0, display_name=dispname,
@@ -72,9 +72,9 @@ class WebMapComponent(Component):
         return dict(item_type=dict(query_item_type.all()))
 
     settings_info = (
-        dict(key='basemaps', desc="Файл с описанием базовых слоёв"),
-        dict(key='bing_apikey', desc="Bing Maps API-ключ"),
-        dict(key='identify_radius', desc="Чувствительность идентификации (3px)"),
-        dict(key='popup_width', desc="Ширина всплывающего окна"),
-        dict(key='popup_height', desc="Высота всплывающего окна"),
+        dict(key='basemaps', desc="Basemaps description file"),
+        dict(key='bing_apikey', desc="Bing Maps API key"),
+        dict(key='identify_radius', desc="Identification sensitivity (3px)"),
+        dict(key='popup_width', desc="Popup width"),
+        dict(key='popup_height', desc="Popup height"),
     )

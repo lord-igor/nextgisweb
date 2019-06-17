@@ -1,6 +1,5 @@
 define([
     "dojo/_base/declare",
-    "dojo/_base/array",
     "dojo/_base/lang",
     "dijit/_WidgetBase",
     "dijit/_TemplatedMixin",
@@ -18,7 +17,6 @@ define([
     "ngw-resource/ResourceBox"
 ], function (
     declare,
-    array,
     lang,
     _WidgetBase,
     _TemplatedMixin,
@@ -33,7 +31,6 @@ define([
         templateString: hbsI18n(template, i18n),
         identity: "resource",
         title: i18n.gettext("Resource"),
-        style: "margin: 1ex;",
 
         postCreate: function () {
             this.inherited(arguments);

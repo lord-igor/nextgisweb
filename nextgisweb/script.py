@@ -5,7 +5,7 @@ import sys
 import os
 import codecs
 from argparse import ArgumentParser
-from ConfigParser import ConfigParser
+from ConfigParser import RawConfigParser
 
 from pyramid.paster import setup_logging
 
@@ -17,12 +17,9 @@ def main(argv=sys.argv):
     argparser = ArgumentParser()
 
     argparser.add_argument(
-        '--config', default=os.environ.get('NEXTGISWEB_CONFIG'),
-        help="Конфигурационный файл nextgisweb")
-
+        '--config', help="nextgisweb configuration file")
     argparser.add_argument(
-        '--logging', default=os.environ.get('NEXTGISWEB_LOGGING'),
-        help="Конфигруционный файл библиотеки logging")
+        '--logging', help="logging library configuration file")
 
     config = None
     logging = None
@@ -37,13 +34,23 @@ def main(argv=sys.argv):
 
         i += 2 if argv[i].startswith('--') else 1
 
+    if config is None:
+        config = os.environ.get('NEXTGISWEB_CONFIG')
+
+    if logging is None:
+        logging = os.environ.get('NEXTGISWEB_LOGGING')
+
     if logging:
         setup_logging(logging)
 
-    cfg = ConfigParser()
+    cfg = RawConfigParser()
 
     if config:
         cfg.readfp(codecs.open(config, 'r', 'utf-8'))
+
+    for section in cfg.sections():
+        for item, value in cfg.items(section):
+            cfg.set(section, item, value % os.environ)
 
     env = Env(cfg=cfg)
     env.initialize()
@@ -70,21 +77,21 @@ def config(argv=sys.argv):
 
     argparser.add_argument(
         '--no-comments', dest='no_comments', action='store_true',
-        help="Не включать описание настроек в комментарии")
+        help="Don't include settings description in comments")
 
     argparser.add_argument(
         '--preseed', metavar='file.ini', default=None,
-        help="Файл с предопределенными настройками")
+        help="Presets file")
 
     args = argparser.parse_args(argv[1:])
 
-    # немного чиним utf-8
+    # trying to fix utf-8
     sys.stdout = codecs.getwriter('utf-8')(sys.stdout)
 
     from .component import Component, load_all
     load_all()
 
-    preseedcfg = ConfigParser()
+    preseedcfg = RawConfigParser()
 
     if args.preseed:
         with codecs.open(args.preseed, 'r', 'utf-8') as fd:

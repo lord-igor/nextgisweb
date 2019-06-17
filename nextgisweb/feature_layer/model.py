@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 from collections import OrderedDict
 
+from osgeo import gdal, ogr, osr
 from sqlalchemy.ext.declarative import declared_attr
 from sqlalchemy.ext.orderinglist import ordering_list
 
@@ -11,10 +12,17 @@ from ..resource import (
     DataStructureScope,
     Serializer,
     SerializedProperty as SP)
+from ..resource.exception import ValidationError
 
-from .interface import FIELD_TYPE
+from .interface import (
+    FIELD_TYPE,
+    FIELD_TYPE_OGR)
+
+from .util import _
 
 Base = declarative_base()
+
+_FIELD_TYPE_2_ENUM_REVERSED = dict(zip(FIELD_TYPE.enum, FIELD_TYPE_OGR))
 
 
 class LayerField(Base):
@@ -90,6 +98,19 @@ class LayerFieldsMixin(object):
             post_update=True
         )
 
+    def to_ogr(self, ogr_ds):
+        srs = osr.SpatialReference()
+        srs.ImportFromEPSG(self.srs.id)
+        ogr_layer = ogr_ds.CreateLayer(r"", srs=srs)
+        for field in self.fields:
+            ogr_layer.CreateField(
+                ogr.FieldDefn(
+                    field.keyname.encode('utf8'),
+                    _FIELD_TYPE_2_ENUM_REVERSED[field.datatype],
+                )
+            )
+        return ogr_layer
+
 
 class _fields_attr(SP):
 
@@ -119,6 +140,8 @@ class _fields_attr(SP):
 
             if fldid:
                 mfld = fldmap.get(fldid)
+                if mfld is None:
+                    raise ValidationError(_("Field not found (ID=%d)." % fldid))
             else:
                 mfld = obj.__field_class__(
                     datatype=fld['datatype'])

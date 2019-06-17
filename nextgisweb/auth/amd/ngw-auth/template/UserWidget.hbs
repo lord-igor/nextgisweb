@@ -30,7 +30,7 @@
 
         <input data-dojo-attach-point="cbSuperuser"
             data-dojo-type="dijit/form/CheckBox"
-            title="{{gettext 'Superuser'}}"/>
+            style="display: none"/>
 
         <textarea data-dojo-attach-point="description"
             data-dojo-type="dijit/form/SimpleTextarea"
@@ -39,8 +39,8 @@
             style="width: 100%; box-sizing: border-box"></textarea>
 
         <select data-dojo-attach-point="memberOf"
-            data-dojo-type="dojox/form/CheckedMultiSelect"
-            data-dojo-props="colspan: 2"
+            data-dojo-type="ngw-auth/PrincipalMemberSelect"
+            data-dojo-props="colspan: 2, route: 'auth.group.edit'"
             multiple="true"
             title="{{gettext 'Groups member'}}"
             style="width: 100%">

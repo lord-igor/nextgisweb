@@ -7,7 +7,7 @@ msgid ""
 msgstr ""
 "Project-Id-Version: nextgisweb 0.0\n"
 "Report-Msgid-Bugs-To: info@nextgis.ru\n"
-"POT-Creation-Date: 2016-05-28 19:33+0300\n"
+"POT-Creation-Date: 2019-05-23 18:36+0000\n"
 "PO-Revision-Date: 2015-09-13 16:08+0300\n"
 "Last-Translator: FULL NAME <EMAIL@ADDRESS>\n"
 "Language: ru\n"
@@ -17,56 +17,196 @@ msgstr ""
 "MIME-Version: 1.0\n"
 "Content-Type: text/plain; charset=utf-8\n"
 "Content-Transfer-Encoding: 8bit\n"
-"Generated-By: Babel 2.2.0\n"
+"Generated-By: Babel 2.6.0\n"
 
-#: view.py:44 template/base.mako:78
+#: template/header.mako:74 view.py:34
 msgid "Control panel"
 msgstr "Панель управления"
 
-#: view.py:53 template/base.mako:89
+#: template/header.mako:82 view.py:43
 msgid "Help"
 msgstr "Справка"
 
-#: view.py:87 view.py:118
+#: view.py:70 view.py:179
 msgid "Package versions"
 msgstr "Версии пакетов"
 
-#: view.py:116
-msgid "System info"
-msgstr "Информация о системе"
+#: view.py:78 view.py:185
+msgid "Cross-origin resource sharing (CORS)"
+msgstr "Cross-origin resource sharing (CORS)"
+
+#: view.py:85 view.py:187
+msgid "Custom CSS"
+msgstr "Пользовательские стили CSS"
+
+#: view.py:92 view.py:189
+msgid "Custom logo"
+msgstr "Логотип"
+
+#: view.py:99 view.py:183
+msgid "Web GIS name"
+msgstr "Название Веб ГИС"
+
+#: view.py:106 view.py:191
+msgid "Miscellaneous"
+msgstr "Разное"
+
+#: view.py:113 view.py:193
+msgid "Home path"
+msgstr "Стартовая страница"
+
+#: view.py:120
+msgid "404: Page not found"
+msgstr "404: Страница не найдена"
+
+#: view.py:178
+msgid "Info"
+msgstr "Информация"
+
+#: view.py:182
+msgid "Settings"
+msgstr "Настройки"
+
+#: amd/ngw-pyramid/CopyButton/CopyButton.js:30
+#: amd/ngw-pyramid/CopyButton/CopyButton.js:32
+msgid "Copy to clipboard"
+msgstr "Копировать"
+
+#: amd/ngw-pyramid/CopyButton/CopyButton.js:33
+msgid "Copied"
+msgstr "Скопировано"
+
+#: amd/ngw-pyramid/CopyButton/CopyButton.js:34
+msgid "Unable to copy"
+msgstr "Не удалось скопировать"
+
+#: amd/ngw-pyramid/form/RTETextBox.js:61
+msgid "Rich Text Editor"
+msgstr "Визуальный редактор"
 
 #: amd/ngw-pyramid/form/ScaleTextBox.js:18
 msgid "Enter the correct scale value, e.g. 1:"
 msgstr "Введите корректное значение масштаба, например 1:"
 
-#: template/base.mako:22
-msgid "Your Web GIS at nextgis.com"
-msgstr "Ваши карты онлайн на nextgis.com"
+#: amd/ngw-pyramid/modelWidget/FormMixin.js:35
+msgid "Create"
+msgstr "Создать"
 
-#: template/base.mako:76
-msgid "Resources"
-msgstr "Ресурсы"
+#: amd/ngw-pyramid/modelWidget/FormMixin.js:37
+#: amd/ngw-pyramid/template/CORSForm.hbs:26
+#: amd/ngw-pyramid/template/CustomCSSForm.hbs:25
+#: amd/ngw-pyramid/template/HomePathForm.hbs:11
+#: amd/ngw-pyramid/template/LogoForm.hbs:22
+#: amd/ngw-pyramid/template/MiscellaneousForm.hbs:29
+#: amd/ngw-pyramid/template/SystemNameForm.hbs:10
+msgid "Save"
+msgstr "Сохранить"
 
-#: template/base.mako:95
+#: amd/ngw-pyramid/modelWidget/FormMixin.js:39
+msgid "Delete"
+msgstr "Удалить"
+
+#: amd/ngw-pyramid/modelWidget/FormMixin.js:88
+msgid "Unexpected error occurred during the operation."
+msgstr "В ходе выполнении операции произошла неожиданная ошибка."
+
+#: amd/ngw-pyramid/right-menu/RightMenu.js:60
+#: amd/ngw-pyramid/user-avatar/UserAvatar.hbs:5
+msgid "Sign out"
+msgstr "Выйти"
+
+#: amd/ngw-pyramid/right-menu/RightMenu.js:65 template/header.mako:19
 msgid "Sign in"
 msgstr "Войти"
 
-#: template/pkginfo.mako:6
+#: amd/ngw-pyramid/template/CORSForm.hbs:17
+msgid ""
+"Enter allowed origins for cross domain requests to use HTTP API of this "
+"Web GIS on other websites. One origin per line."
+msgstr ""
+"Введите перечень допустимых источников для кросс-доменных запросов для "
+"использования HTTP API этой Веб ГИС на других веб-сайтах. По одному "
+"источнику в строке."
+
+#: amd/ngw-pyramid/template/CORSForm.hbs:18
+msgid ""
+"Please note that different protocols (HTTP and HTTPS) and subdomains "
+"(example.com and www.example.com) are different origins. Wildcards are "
+"not allowed."
+msgstr ""
+"Имейте в виду, что разные протоколы (HTTP и HTTPS) и субдомены "
+"(example.com и www.example.com) считаются разными источниками. Символ "
+"подстановки (*) недопустим."
+
+#: amd/ngw-pyramid/template/CustomCSSForm.hbs:17
+msgid ""
+"Enter custom CSS rules here. They will be used to redefine styles, design"
+" for all pages of your Web GIS."
+msgstr ""
+"Здесь можно задать стили CSS. Они будут использованы для оформления всех "
+"страниц вашей Веб ГИС."
+
+#: amd/ngw-pyramid/template/LogoForm.hbs:12
+msgid "Upload a PNG logo"
+msgstr "Выберите логотип в формате PNG"
+
+#: amd/ngw-pyramid/template/LogoForm.hbs:13
+msgid ""
+"We recommend height of 45 px and width of up to 200 px. Refresh the page "
+"after upload."
+msgstr ""
+"Рекомендуемая высота 45 пикселей, ширина до 200 пикселей. Обновите "
+"страницу после загрузки."
+
+#: amd/ngw-pyramid/template/LogoForm.hbs:25
+msgid "Restore default"
+msgstr "Восстановить по-умолчанию"
+
+#: amd/ngw-pyramid/template/MiscellaneousForm.hbs:16
+msgid "Measurement units"
+msgstr "Единицы измерения"
+
+#: amd/ngw-pyramid/template/MiscellaneousForm.hbs:17
+msgid "Meters/Kilometers"
+msgstr "Метры/Километры"
+
+#: amd/ngw-pyramid/template/MiscellaneousForm.hbs:18
+msgid "Feet/Miles"
+msgstr "Футы/Мили"
+
+#: template/404.mako:22
+msgid "Think this page should be here?"
+msgstr "Если считаете, что это ошибка,"
+
+#: template/404.mako:23
+msgid "http://nextgis.com/contact/"
+msgstr "http://nextgis.ru/contact/"
+
+#: template/404.mako:24
+msgid "Contact us"
+msgstr "напишите нам"
+
+#: template/base.mako:29
+msgid "Your Web GIS at nextgis.com"
+msgstr "Ваши карты онлайн на nextgis.com"
+
+#: template/header.mako:69
+msgid "Resources"
+msgstr "Ресурсы"
+
+#: template/pkginfo.mako:22
 msgid "Platform"
 msgstr "Платформа"
 
-#: template/pkginfo.mako:9
+#: template/pkginfo.mako:25
 msgid "Packages"
 msgstr "Пакеты"
 
-#: template/pkginfo.mako:14
+#: template/pkginfo.mako:31
 msgid "Package"
 msgstr "Пакет"
 
-#: template/pkginfo.mako:15
+#: template/pkginfo.mako:32
 msgid "Version"
 msgstr "Версия"
-
-#~ msgid "Sign out"
-#~ msgstr "Выйти"
 

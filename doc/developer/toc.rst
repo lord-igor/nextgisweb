@@ -2,9 +2,9 @@
 
 .. NextGIS Web develop TOC
 
-.. _ngw_api_description:
+.. _ngwdev_description:
 
-REST API description
+NextGIS Web REST API 
 ====================
 
 .. toctree::
@@ -18,3 +18,4 @@ REST API description
    misc
    error_report
    vector_data_types
+   python_api

@@ -1,7 +1,8 @@
 # -*- coding: utf-8 -*-
 from __future__ import unicode_literals, print_function, absolute_import
+import os
 import codecs
-from ConfigParser import ConfigParser
+from ConfigParser import RawConfigParser
 
 from pyramid.config import Configurator
 from pyramid.paster import setup_logging
@@ -59,8 +60,12 @@ def main(global_config, **settings):
     if 'logging' in settings:
         setup_logging(settings['logging'])
 
-    cfg = ConfigParser()
+    cfg = RawConfigParser()
     cfg.readfp(codecs.open(settings['config'], 'r', 'utf-8'))
+
+    for section in cfg.sections():
+        for item, value in cfg.items(section):
+            cfg.set(section, item, value % os.environ)
 
     env = Env(cfg)
     env.initialize()
@@ -73,7 +78,7 @@ def main(global_config, **settings):
 
 def amd_packages():
     return (
-        # Сторонние пакеты
+        # contrib packages
         ('dojo', 'nextgisweb:amd_packages/contrib/dojo'),
         ('dijit', 'nextgisweb:amd_packages/contrib/dijit'),
         ('dojox', 'nextgisweb:amd_packages/contrib/dojox'),
@@ -83,17 +88,20 @@ def amd_packages():
         ('dgrid', 'nextgisweb:amd_packages/contrib/dgrid'),
         ('handlebars', 'nextgisweb:amd_packages/contrib/handlebars'),
         ('openlayers', 'nextgisweb:amd_packages/contrib/openlayers'),
+        ('svg4everybody', 'nextgisweb:amd_packages/contrib/svg4everybody'),
+        ('codemirror', 'nextgisweb:amd_packages/contrib/codemirror'),
+        ('jquery', 'nextgisweb:amd_packages/contrib/jquery'),
 
-        # Пакеты nextgisweb
+        # nextgisweb packages
         ('ngw', 'nextgisweb:amd_packages/ngw'),
 
-        # Пакеты компонентов
+        # components packages
         ('ngw-pyramid', 'nextgisweb:pyramid/amd/ngw-pyramid'),
         ('ngw-resource', 'nextgisweb:resource/amd/ngw-resource'),
         ('ngw-resmeta', 'nextgisweb:resmeta/amd/ngw-resmeta'),
-        ('ngw-feature-layer', 'nextgisweb:feature_layer/amd'),
-        ('ngw-feature-description', 'nextgisweb:feature_description/amd'),
-        ('ngw-feature-attachment', 'nextgisweb:feature_attachment/amd'),
+        ('ngw-feature-layer', 'nextgisweb:feature_layer/amd/ngw-feature-layer'),
+        ('ngw-feature-description', 'nextgisweb:feature_description/amd/ngw-feature-description'),
+        ('ngw-feature-attachment', 'nextgisweb:feature_attachment/amd/ngw-feature-attachment'),
         ('ngw-postgis', 'nextgisweb:postgis/amd/ngw-postgis'),
         ('ngw-wmsclient', 'nextgisweb:wmsclient/amd/ngw-wmsclient'),
         ('ngw-wmsserver', 'nextgisweb:wmsserver/amd/ngw-wmsserver'),

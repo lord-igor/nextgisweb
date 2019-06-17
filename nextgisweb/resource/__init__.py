@@ -59,6 +59,38 @@ class ResourceComponent(Component):
         if self.perm_cache_enable:
             self.perm_cache_instance = PermissionCache.construct(settings)
 
+        svalue = settings.get('disabled_cls', None)
+        self.disabled_cls = re.split(',\s*', svalue) if svalue is not None \
+            else list()
+
+    def initialize(self):
+        super(ResourceComponent, self).initialize()
+        for item in self.disabled_cls:
+            Resource.registry[item]
+
+        self.quota_limit = int(self.settings['quota.limit']) if \
+            'quota.limit' in self.settings else None
+
+        self.quota_resource_cls = re.split(
+            r'[,\s]+', self.settings['quota.resource_cls']) if \
+            'quota.resource_cls' in self.settings else None
+
+        self.quota_resource_by_cls = self.parse_quota_resource_by_cls()
+
+    def parse_quota_resource_by_cls(self):
+        quota_resource_by_cls = dict()
+
+        if 'quota.resource_by_cls' not in self.settings:
+            return quota_resource_by_cls
+
+        quota_resources_pairs = re.split(r'[,\s]+', self.settings['quota.resource_by_cls'])
+        if quota_resources_pairs:
+            for pair in quota_resources_pairs:
+                resource_quota = re.split(r'[:\s]+', pair)
+                quota_resource_by_cls[resource_quota[0]] = int(resource_quota[1])
+
+        return quota_resource_by_cls
+
     @require('auth')
     def initialize_db(self):
         adminusr = User.filter_by(keyname='administrator').one()
@@ -115,9 +147,16 @@ class ResourceComponent(Component):
             by_cls[cls] = count
             total += count
 
+        query = DBSession.query(db.func.max(Resource.creation_date))
+        cdate = query.scalar()
+
         return dict(
-            resource_count=dict(total=total, cls=by_cls))
+            resource_count=dict(total=total, cls=by_cls),
+            last_creation_date=cdate)
 
     settings_info = (
+        dict(key="disabled_cls", desc="Resource classes disabled for creation"),
         dict(key="everyone_permissions", desc="Permissions for user Everyone"),
+        dict(key="quota.resource_cls", desc="Countable resources"),
+        dict(key="quota.limit", desc="Quota limit"),
     ) + cache_settings_info

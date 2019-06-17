@@ -34,6 +34,8 @@ class WebMap(Base, Resource):
 
     root_item_id = db.Column(db.ForeignKey('webmap_item.id'), nullable=False)
     bookmark_resource_id = db.Column(db.ForeignKey(Resource.id), nullable=True)
+    draw_order_enabled = db.Column(db.Boolean, nullable=True)
+    editable = db.Column(db.Boolean, nullable=False, default=False)
 
     extent_left = db.Column(db.Float, default=-180)
     extent_right = db.Column(db.Float, default=+180)
@@ -41,7 +43,8 @@ class WebMap(Base, Resource):
     extent_top = db.Column(db.Float, default=+90)
 
     bookmark_resource = db.relationship(
-        Resource, foreign_keys=bookmark_resource_id)
+        Resource, foreign_keys=bookmark_resource_id,
+        backref=db.backref('bookmarked_webmaps'))
 
     root_item = db.relationship('WebMapItem', cascade='all')
 
@@ -53,6 +56,7 @@ class WebMap(Base, Resource):
         return dict(
             id=self.id,
             display_name=self.display_name,
+            editable=self.editable,
             root_item=self.root_item.to_dict(),
             bookmark_resource_id=self.bookmark_resource_id,
             extent=(self.extent_left, self.extent_bottom,
@@ -72,7 +76,10 @@ class WebMap(Base, Resource):
 
         if 'extent' in data:
             self.extent_left, self.extent_bottom, \
-                self.extent_right, self.extent_top = data['extent']
+            self.extent_right, self.extent_top = data['extent']
+
+        if 'editable' in data:
+            self.editable = data['editable']
 
 
 class WebMapItem(Base):
@@ -90,6 +97,7 @@ class WebMapItem(Base):
     layer_min_scale_denom = db.Column(db.Float, nullable=True)
     layer_max_scale_denom = db.Column(db.Float, nullable=True)
     layer_adapter = db.Column(db.Unicode, nullable=True)
+    draw_order_position = db.Column(db.Integer, nullable=True)
 
     parent = db.relationship(
         'WebMapItem', remote_side=id, backref=db.backref(
@@ -98,8 +106,8 @@ class WebMapItem(Base):
 
     style = db.relationship(
         'Resource',
-        # Временное решение, позволяющее при удалении стиля автоматически
-        # удалять элементы веб-карты
+        # Temporary solution that allows to automatically
+        # remove web-map elements when style is removed
         backref=db.backref('webmap_items', cascade='all')
     )
 
@@ -132,6 +140,7 @@ class WebMapItem(Base):
                 layer_min_scale_denom=self.layer_min_scale_denom,
                 layer_max_scale_denom=self.layer_max_scale_denom,
                 layer_adapter=self.layer_adapter,
+                draw_order_position=self.draw_order_position,
             )
 
     def from_dict(self, data):
@@ -145,7 +154,8 @@ class WebMapItem(Base):
 
         for a in ('display_name', 'group_expanded', 'layer_enabled',
                   'layer_adapter', 'layer_style_id', 'layer_transparency',
-                  'layer_min_scale_denom', 'layer_max_scale_denom'):
+                  'layer_min_scale_denom', 'layer_max_scale_denom',
+                  'draw_order_position'):
 
             if a in data:
                 setattr(self, a, data[a])
@@ -177,6 +187,9 @@ class WebMapSerializer(Serializer):
     extent_right = SP(**_mdargs)
     extent_bottom = SP(**_mdargs)
     extent_top = SP(**_mdargs)
+
+    draw_order_enabled = SP(**_mdargs)
+    editable = SP(**_mdargs)
 
     bookmark_resource = SRR(**_mdargs)
 

@@ -15,11 +15,10 @@ define([
     "ngw-pyramid/i18n!wfsserver",
     "ngw-pyramid/hbs-i18n",
     "ngw-resource/serialize",
-    "ngw-resource/ResourceStore",
-    "ngw-resource/ResourcePicker",
     // resource
     "dojo/text!./template/ServiceWidget.hbs",
     // template
+    "ngw-resource/ResourcePicker",
     "dijit/layout/TabContainer",
     "dojox/layout/TableContainer",
     "dijit/layout/BorderContainer",
@@ -52,8 +51,6 @@ define([
     i18n,
     hbsI18n,
     serialize,
-    ResourceStore,
-    ResourcePicker,
     template
 ) {
     return declare([ContentPane, serialize.Mixin, _TemplatedMixin, _WidgetsInTemplateMixin], {
@@ -77,16 +74,12 @@ define([
                 showRoot: false,
                 getLabel: function (item) { return item.display_name; },
                 getIconClass: function(item, opened){
-                    return item.item_type == "group" ? (opened ? "dijitFolderOpened" : "dijitFolderClosed") : "dijitLeaf";
+                    return "dijitLeaf";
                 },
                 persist: false,
                 dndController: dndSource,
                 checkItemAcceptance: function (node, source, position) {
-                    var item = registry.getEnclosingWidget(node).item,
-                        item_type = widget.itemStore.getValue(item, "item_type");
-                    // Блокируем возможность перетащить элемент внутрь слоя,
-                    // перенос внутрь допустим только для группы
-                    return item_type === "group" || (item_type === "layer" && position !== "over");
+                    return position !== "over";
                 },
                 betweenThreshold: 5
             });
@@ -98,22 +91,21 @@ define([
         postCreate: function () {
             this.inherited(arguments);
 
-            // Создать дерево без model не получается, поэтому создаем его вручную
+            // It is impossible to create a tree without a model, so creating it manually
             this.widgetTree.placeAt(this.containerTree).startup();
 
             var widget = this;
 
-            // Добавление нового слоя
+            // Add new layer
             this.btnAddLayer.on("click", lang.hitch(this, function () {
                 this.layerPicker.pick().then(lang.hitch(this, function (itm) {
                     this.itemStore.newItem({
-                            "item_type": "layer",
                             "keyname": null,
                             "display_name": itm.display_name,
                             "maxfeatures": 1000,
                             "resource_id": itm.id
                         }, {
-                            parent: widget.getAddParent(),
+                            parent: widget.itemModel.root,
                             attribute: "children"
                         }
                     );
@@ -125,7 +117,7 @@ define([
                 }));
             }));
 
-            // Удаление слоя или группы
+            // Remove a layer or group
             this.btnDeleteItem.on("click", function() {
                 var item = widget.widgetTree.selectedItem,
                     identity = widget.itemModel.getIdentity(item),
@@ -133,7 +125,7 @@ define([
                     prevSibling = node.getPreviousSibling(),
                     nextSibling = node.getNextSibling();
 
-                // Переключаемся на соседнюю ноду
+                // Switch to next node
                 var sibling = prevSibling ? prevSibling : nextSibling;
                 if (sibling) {
                     widget.widgetTree.set("path", [
@@ -155,17 +147,17 @@ define([
                     widget.widgetItemDisplayName.set("value", widget.getItemValue("display_name"));
                     widget.widgetItemMaxFeatures.set("value", widget.getItemValue("maxfeatures"));
 
-                    // Изначально боковая панель со свойствами текущего элемента
-                    // спрятана. Поскольку элемент уже выбран - ее нужно показать.
+                    // Initially the side panel with current element properties is 
+                    // hidden. As the element is selected - open it up.
                     if (!oldValue) {
                         domStyle.set(widget.itemPane.domNode, "display", "block");
                         widget.treeLayoutContainer.addChild(widget.itemPane);
                     }
 
-                    // Активируем кнопку удаления слоя или группы
+                    // Activate layer/group deletion button
                     widget.btnDeleteItem.set("disabled", false);
 
-                    // Помещаем фокус на обязательное поле с ключом
+                    // Move focus to required field with a key
                     widget.widgetItemKeyname.focus();
                 }
             });
@@ -187,20 +179,12 @@ define([
             this.inherited(arguments);
         },
 
-        getAddParent: function () {
-            if (this.getItemValue("item_type") == "group") {
-                return this.widgetTree.selectedItem;
-            } else {
-                return this.itemModel.root;
-            }
-        },
-
-        // установить значение аттрибута текущего элемента
+        // set current element attribute value
         setItemValue: function (attr, value) {
             this.itemStore.setValue(this.widgetTree.selectedItem, attr, value);
         },
 
-        // значение аттрибута текущего элемента
+        // current element attribute value
         getItemValue: function (attr) {
             if (this.widgetTree.selectedItem) {
                 return this.itemStore.getValue(this.widgetTree.selectedItem, attr);
@@ -233,7 +217,7 @@ define([
                 this.itemIdx++;
             }, this);
 
-            // При загрузке отмечаем самую первую ноду
+            // On load mark the very first node
             if (this.itemIdx > 0) {
                 this.widgetTree.set("path", [this.widgetTreeRootNodeId, 1]);
             }

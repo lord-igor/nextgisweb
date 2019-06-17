@@ -2,6 +2,11 @@
 from __future__ import unicode_literals, print_function, absolute_import
 import subprocess
 
+import os
+import os.path
+from tempfile import NamedTemporaryFile
+from shutil import copy
+
 import sqlalchemy as sa
 import sqlalchemy.orm as orm
 
@@ -23,6 +28,8 @@ from ..layer import SpatialLayerMixin, IBboxLayer
 from ..file_storage import FileObj
 
 from .util import _
+
+PYRAMID_TARGET_SIZE = 512
 
 Base = declarative_base()
 
@@ -58,15 +65,22 @@ class RasterLayer(Base, Resource, SpatialLayerMixin):
         if not ds:
             raise ValidationError(_("GDAL library was unable to open the file."))
 
-        if ds.RasterCount not in (3, 4):
-            raise ValidationError(_("Only RGB and RGBA rasters are supported."))
+        if ds.RasterCount not in (1, 3, 4):
+            raise ValidationError(_("Only RGB, RGBA and single-band rasters are supported."))
 
-        for bidx in range(1, ds.RasterCount + 1):
-            band = ds.GetRasterBand(bidx)
+        paletted = None
+        if ds.RasterCount == 1:
+            band = ds.GetRasterBand(1)
+            paletted = band.GetRasterColorTable()
+            if paletted is None:
+                raise ValidationError(_("Only paletted single-band rasters are supported."))
+        else:
+            for bidx in range(1, ds.RasterCount + 1):
+                band = ds.GetRasterBand(bidx)
 
-            if band.DataType not in SUPPORTED_GDT:
-                raise ValidationError(_("Band #%(band)d has type '%(type)s', however only following band types are supported: %(all_types)s.") % dict(
-                    band=bidx, type=gdal.GetDataTypeName(band.DataType), all_types=SUPPORTED_GDT_NAMES))
+                if band.DataType not in SUPPORTED_GDT:
+                    raise ValidationError(_("Band #%(band)d has type '%(type)s', however only following band types are supported: %(all_types)s.") % dict(
+                        band=bidx, type=gdal.GetDataTypeName(band.DataType), all_types=SUPPORTED_GDT_NAMES))
 
         dsproj = ds.GetProjection()
         dsgtran = ds.GetGeoTransform()
@@ -77,13 +91,13 @@ class RasterLayer(Base, Resource, SpatialLayerMixin):
         src_osr = osr.SpatialReference()
         src_osr.ImportFromWkt(dsproj)
         dst_osr = osr.SpatialReference()
-        src_osr.ImportFromEPSG(int(self.srs.id))
+        dst_osr.ImportFromEPSG(int(self.srs.id))
 
         reproject = not src_osr.IsSame(dst_osr)
 
         fobj = FileObj(component='raster_layer')
 
-        dst_file = env.file_storage.filename(fobj, makedirs=True)
+        dst_file = env.raster_layer.workdir_filename(fobj, makedirs=True)
         self.fileobj = fobj
 
         if reproject:
@@ -98,15 +112,60 @@ class RasterLayer(Base, Resource, SpatialLayerMixin):
                     '-co', 'BIGTIFF=YES', filename, dst_file))
         subprocess.check_call(cmd)
 
+        if paletted:
+            # Convert paletted single-band image into RGBA image.
+            # For a paletted TIFF with nodata, set the alpha component
+            # of the color entry that matches the nodata value to 0.
+            # https://trac.osgeo.org/gdal/changeset/28000 (GDAL 2.X)
+            try:
+                tf = NamedTemporaryFile()
+                copy(dst_file, tf.name)
+
+                cmd = ['gdal_translate', '-expand', 'rgba',
+                       tf.name, dst_file]
+                subprocess.check_call(cmd)
+            finally:
+                tf.close()
+
         ds = gdal.Open(dst_file, gdalconst.GA_ReadOnly)
 
         self.xsize = ds.RasterXSize
         self.ysize = ds.RasterYSize
         self.band_count = ds.RasterCount
 
+        self.build_overview()
+
     def gdal_dataset(self):
-        fn = env.file_storage.filename(self.fileobj)
+        fn = env.raster_layer.workdir_filename(self.fileobj)
         return gdal.Open(fn, gdalconst.GA_ReadOnly)
+
+    def build_overview(self):
+        fn = env.raster_layer.workdir_filename(self.fileobj)
+        ds = gdal.Open(fn, gdalconst.GA_ReadOnly)
+
+        cursize = max(self.xsize, self.ysize)
+        multiplier = 2
+        levels = []
+
+        while cursize > PYRAMID_TARGET_SIZE:
+            levels.append(str(multiplier))
+            cursize /= 2
+            multiplier *= 2
+
+        cmd = ['gdaladdo', '-q', '-clean', fn]
+
+        env.raster_layer.logger.debug('Removing existing overviews with command: ' + ' '.join(cmd))
+        subprocess.check_call(cmd)
+
+        cmd = ['gdaladdo', '-q', '-ro', '-r', 'cubic',
+            '--config', 'COMPRESS_OVERVIEW', 'JPEG',
+            '--config', 'INTERLEAVE_OVERVIEW', 'PIXEL',
+            '--config', 'BIGTIFF_OVERVIEW', 'YES',
+            fn
+        ] + levels
+
+        env.raster_layer.logger.debug('Building raster overview with command: ' + ' '.join(cmd))
+        subprocess.check_call(cmd)
 
     def get_info(self):
         s = super(RasterLayer, self)
@@ -127,34 +186,30 @@ class RasterLayer(Base, Resource, SpatialLayerMixin):
         dst_osr.ImportFromEPSG(4326)
         coordTrans = osr.CoordinateTransformation(src_osr, dst_osr)
 
-
         ds = self.gdal_dataset()
         geoTransform = ds.GetGeoTransform()
 
-        minx = geoTransform[0]
-        maxy = geoTransform[3]
-        maxx = minx + geoTransform[1] * ds.RasterXSize
-        miny = maxy + geoTransform[5] * ds.RasterYSize
+        # ul | ur: upper left | upper right
+        # ll | lr: lower left | lower right
+        x_ul = geoTransform[0]
+        y_ul = geoTransform[3]
 
-        ll_corner = ogr.Geometry(ogr.wkbPoint)
-        ll_corner.AddPoint(minx, miny)
-        ll_corner.Transform(coordTrans)
+        x_lr = x_ul + ds.RasterXSize*geoTransform[1] + ds.RasterYSize*geoTransform[2];
+        y_lr = y_ul + ds.RasterXSize*geoTransform[4] + ds.RasterYSize*geoTransform[5];
 
-        ur_corner = ogr.Geometry(ogr.wkbPoint)
-        ur_corner.AddPoint(maxx, maxy)
-        ur_corner.Transform(coordTrans)
+        ll = ogr.Geometry(ogr.wkbPoint)
+        ll.AddPoint(x_ul, y_lr)
+        ll.Transform(coordTrans)
 
-
-        minLon = ll_corner.GetX()
-        maxLat = ll_corner.GetY()
-        maxLon = ur_corner.GetX()
-        minLat = ur_corner.GetY()
+        ur = ogr.Geometry(ogr.wkbPoint)
+        ur.AddPoint(x_lr, y_ul)
+        ur.Transform(coordTrans)
 
         extent = dict(
-            minLon=minLon,
-            maxLon=maxLon,
-            minLat=minLat,
-            maxLat=maxLat
+            minLon=ll.GetX(),
+            maxLon=ur.GetX(),
+            minLat=ll.GetY(),
+            maxLat=ur.GetY()
         )
 
         return extent

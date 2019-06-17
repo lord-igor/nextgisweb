@@ -1,13 +1,11 @@
 # -*- coding: utf-8 -*-
 import json
-import re
-import urllib
 from types import MethodType
 from collections import OrderedDict
 
-import geojson
 from pyramid.response import Response
 
+from .. import geojson
 from ..resource import (
     Resource,
     ResourceScope,
@@ -21,15 +19,8 @@ from .. import dynmenu as dm
 
 from .interface import IFeatureLayer
 from .extension import FeatureExtension
+from .ogrdriver import OGR_DRIVER_NAME_2_EXPORT_FORMAT
 from .util import _
-
-
-class ComplexEncoder(geojson.GeoJSONEncoder):
-    def default(self, obj):
-        try:
-            return geojson.GeoJSONEncoder.default(self, obj)
-        except TypeError:
-            return str(obj)
 
 
 class FeatureLayerFieldsWidget(Widget):
@@ -100,63 +91,6 @@ def field_collection(request):
     return [f.to_dict() for f in request.context.fields]
 
 
-def store_collection(layer, request):
-    request.resource_permission(PD_READ)
-
-    query = layer.feature_query()
-
-    http_range = request.headers.get('range')
-    if http_range and http_range.startswith('items='):
-        first, last = map(int, http_range[len('items='):].split('-', 1))
-        query.limit(last - first + 1, first)
-
-    field_prefix = json.loads(
-        urllib.unquote(request.headers.get('x-field-prefix', '""')))
-    pref = lambda (f): field_prefix + f
-
-    field_list = json.loads(
-        urllib.unquote(request.headers.get('x-field-list', "[]")))
-    if len(field_list) > 0:
-        query.fields(*field_list)
-
-    box = request.headers.get('x-feature-box')
-    if box:
-        query.box()
-
-    like = request.params.get('like', '')
-    if like != '':
-        query.like(like)
-
-    sort_re = re.compile(r'sort\(([+-])%s(\w+)\)' % (field_prefix, ))
-    sort = sort_re.search(urllib.unquote(request.query_string))
-    if sort:
-        sort_order = {'+': 'asc', '-': 'desc'}[sort.group(1)]
-        sort_colname = sort.group(2)
-        query.order_by((sort_order, sort_colname), )
-
-    features = query()
-
-    result = []
-    for fobj in features:
-        fdata = dict(
-            [(pref(k), v) for k, v in fobj.fields.iteritems()],
-            id=fobj.id, label=fobj.label)
-        if box:
-            fdata['box'] = fobj.box.bounds
-
-        result.append(fdata)
-
-    headers = dict()
-    headers["Content-Type"] = 'application/json'
-
-    if http_range:
-        total = features.total_count
-        last = min(total - 1, last)
-        headers['Content-Range'] = 'items %d-%s/%d' % (first, last, total)
-
-    return Response(json.dumps(result, cls=ComplexEncoder), headers=headers)
-
-
 def store_item(layer, request):
     request.resource_permission(PD_READ)
 
@@ -187,87 +121,11 @@ def store_item(layer, request):
             result['ext'][extcls.identity] = extension.feature_data(feature)
 
     return Response(
-        json.dumps(result, cls=ComplexEncoder),
+        json.dumps(result, cls=geojson.Encoder),
         content_type='application/json')
 
 
 def setup_pyramid(comp, config):
-    DBSession = comp.env.core.DBSession
-
-    def identify(request):
-        """ Сервис идентификации объектов на слоях, поддерживающих интерфейс
-        IFeatureLayer """
-
-        sett_name = 'permissions.disable_check.identify'
-        setting_disable_check = request.env.core.settings.get(sett_name, 'false').lower()
-        if setting_disable_check in ('true', 'yes', '1'):
-            setting_disable_check = True
-        else:
-            setting_disable_check = False
-
-        srs = int(request.json_body['srs'])
-        geom = geom_from_wkt(request.json_body['geom'], srid=srs)
-        layers = map(int, request.json_body['layers'])
-
-        layer_list = DBSession.query(Resource).filter(Resource.id.in_(layers))
-
-        result = dict()
-
-        # Количество объектов для всех слоев
-        feature_count = 0
-
-        for layer in layer_list:
-            if not setting_disable_check and not layer.has_permission(DataScope.read, request.user):
-                result[layer.id] = dict(error="Forbidden")
-
-            elif not IFeatureLayer.providedBy(layer):
-                result[layer.id] = dict(error="Not implemented")
-
-            else:
-                query = layer.feature_query()
-                query.intersects(geom)
-
-                # Ограничиваем кол-во идентифицируемых объектов по 10 на слой,
-                # иначе ответ может оказаться очень большим.
-                query.limit(10)
-
-                features = [
-                    dict(id=f.id, layerId=layer.id,
-                         label=f.label, fields=f.fields)
-                    for f in query()
-                ]
-
-                # Добавляем в результаты идентификации название
-                # родительского ресурса (можно использовать в случае,
-                # если на клиенте нет возможности извлечь имя слоя по
-                # идентификатору)
-                if not setting_disable_check:
-                    allow = layer.parent.has_permission(PR_R, request.user)
-                else:
-                    allow = True
-
-                if allow:
-                    for feature in features:
-                        feature['parent'] = layer.parent.display_name
-
-                result[layer.id] = dict(
-                    features=features,
-                    featureCount=len(features)
-                )
-
-                feature_count += len(features)
-
-        result["featureCount"] = feature_count
-
-        return Response(
-            json.dumps(result, cls=ComplexEncoder),
-            content_type='application/json')
-
-    config.add_route(
-        'feature_layer.identify', '/feature_layer/identify',
-        client=(),
-    ).add_view(identify)
-
     config.add_route(
         'feature_layer.feature.browse',
         '/resource/{id:\d+}/feature/',
@@ -296,12 +154,6 @@ def setup_pyramid(comp, config):
     ).add_view(field_collection, context=IFeatureLayer, renderer='json')
 
     config.add_route(
-        'feature_layer.store',
-        '/resource/{id:\d+}/store/',
-        factory=resource_factory, client=('id', )
-    ).add_view(store_collection, context=IFeatureLayer)
-
-    config.add_route(
         'feature_layer.store.item',
         '/resource/{id:\d+}/store/{feature_id:\d+}',
         factory=resource_factory,
@@ -323,11 +175,15 @@ def setup_pyramid(comp, config):
             identify=dict(
                 attributes=self.settings['identify.attributes']
             ),
+            search=dict(
+                nominatim=self.settings['search.nominatim']
+            ),
+            export_formats=OGR_DRIVER_NAME_2_EXPORT_FORMAT,
         )
 
     comp.client_settings = MethodType(client_settings, comp, comp.__class__)
 
-    # Расширения меню слоя
+    # Layer menu extension
     class LayerMenuExt(dm.DynItem):
 
         def build(self, args):
@@ -341,14 +197,16 @@ def setup_pyramid(comp, config):
                         id=args.obj.id))
 
                 yield dm.Link(
-                    'feature_layer/geojson', _(u"Download as GeoJSON"),
+                    'feature_layer/export-geojson', _(u"Download as GeoJSON"),
                     lambda args: args.request.route_url(
-                        "feature_layer.geojson", id=args.obj.id))
+                        "feature_layer.export", id=args.obj.id,
+                        _query={"format": "geojson", "zipped": "false"}))
 
                 yield dm.Link(
-                    'feature_layer/geojson', _(u"Download as CSV"),
+                    'feature_layer/export-csv', _(u"Download as CSV"),
                     lambda args: args.request.route_url(
-                        "feature_layer.csv", id=args.obj.id))
+                        "feature_layer.export", id=args.obj.id,
+                        _query={"format": "csv", "zipped": "false"}))
 
     Resource.__dynmenu__.add(LayerMenuExt())
 

@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
-import operator
+import geoalchemy2 as ga
 import re
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.engine.url import (
     URL as EngineURL,
     make_url as make_engine_url)
@@ -32,6 +33,7 @@ from ..feature_layer import (
     GEOM_TYPE,
     FIELD_TYPE,
     IFeatureLayer,
+    IWritableFeatureLayer,
     IFeatureQuery,
     IFeatureQueryFilter,
     IFeatureQueryFilterBy,
@@ -62,6 +64,7 @@ class PostgisConnection(Base, Resource):
     database = db.Column(db.Unicode, nullable=False)
     username = db.Column(db.Unicode, nullable=False)
     password = db.Column(db.Unicode, nullable=False)
+    port = db.Column(db.Integer, nullable=True)
 
     @classmethod
     def check_parent(cls, parent): # NOQA
@@ -70,9 +73,9 @@ class PostgisConnection(Base, Resource):
     def get_engine(self):
         comp = env.postgis
 
-        # На случай, если параметры подключения изменинись
-        # их нужно проверять при каждом запросе подключения
-        credhash = (self.hostname, self.database, self.username, self.password)
+        # Need to check connection params to see if
+        # they changed for each connection request
+        credhash = (self.hostname, self.port, self.database, self.username, self.password)
 
         if self.id in comp._engine:
             engine = comp._engine[self.id]
@@ -85,7 +88,7 @@ class PostgisConnection(Base, Resource):
 
         engine = db.create_engine(make_engine_url(EngineURL(
             'postgresql+psycopg2',
-            host=self.hostname, database=self.database,
+            host=self.hostname, port=self.port, database=self.database,
             username=self.username, password=self.password)))
 
         resid = self.id
@@ -114,7 +117,11 @@ class PostgisConnection(Base, Resource):
         return engine
 
     def get_connection(self):
-        return self.get_engine().connect()
+        try:
+            conn = self.get_engine().connect()
+        except OperationalError:
+            raise ValidationError(_("Cannot connect to the database!"))
+        return conn
 
 
 class PostgisConnectionSerializer(Serializer):
@@ -125,6 +132,7 @@ class PostgisConnectionSerializer(Serializer):
     database = SP(read=PC_READ, write=PC_WRITE)
     username = SP(read=PC_READ, write=PC_WRITE)
     password = SP(read=PC_READ, write=PC_WRITE)
+    port = SP(read=PC_READ, write=PC_WRITE)
 
 
 class PostgisLayerField(Base, LayerField):
@@ -143,7 +151,7 @@ class PostgisLayer(Base, Resource, SpatialLayerMixin, LayerFieldsMixin):
 
     __scope__ = DataScope
 
-    implements(IFeatureLayer)
+    implements(IFeatureLayer, IWritableFeatureLayer)
 
     connection_id = db.Column(db.ForeignKey(Resource.id), nullable=False)
     schema = db.Column(db.Unicode, default=u'public', nullable=False)
@@ -211,7 +219,23 @@ class PostgisLayer(Base, Resource, SpatialLayerMixin, LayerFieldsMixin):
             row = result.first()
 
             if row:
-                self.geometry_srid = row['srid']
+                geometry_srid = row['srid']
+
+                if geometry_srid == 0 and self.geometry_srid is None:
+                    raise ValidationError(_("SRID missing in geometry_columns table! You should specify it manually."))  # NOQA
+
+                if (self.geometry_srid == 0):
+                    raise ValidationError(_("0 is an invalid SRID."))
+
+                if (
+                    self.geometry_srid is not None
+                    and geometry_srid != 0
+                    and self.geometry_srid != geometry_srid
+                ):
+                    raise ValidationError(_("SRID in geometry_columns table does not match specified!"))  # NOQA
+
+                if self.geometry_srid is None:
+                    self.geometry_srid = geometry_srid
 
                 tab_geom_type = row['type']
 
@@ -256,6 +280,8 @@ class PostgisLayer(Base, Resource, SpatialLayerMixin, LayerFieldsMixin):
                     datatype = None
                     if row['data_type'] == 'integer':
                         datatype = FIELD_TYPE.INTEGER
+                    elif row['data_type'] == 'bigint':
+                        datatype = FIELD_TYPE.BIGINT
                     elif row['data_type'] == 'double precision':
                         datatype = FIELD_TYPE.REAL
                     elif row['data_type'] == 'character varying':
@@ -312,6 +338,120 @@ class PostgisLayer(Base, Resource, SpatialLayerMixin, LayerFieldsMixin):
 
         raise KeyError("Field '%s' not found!" % keyname)
 
+    # IWritableFeatureLayer
+
+    def makevals(self, feature):
+        values = dict()
+
+        for f in self.fields:
+            if f.keyname in feature.fields.keys():
+                values[f.keyname] = feature.fields[f.keyname]
+
+        if feature.geom is not None:
+            values[self.column_geom] = db.func.st_transform(
+                ga.elements.WKTElement(str(feature.geom), srid=self.srs_id),
+                self.geometry_srid)
+
+        return values
+
+    def feature_put(self, feature):
+        """Update existing object
+
+        :param feature: object description
+        :type feature:  Feature
+        """
+        conn = self.connection.get_connection()
+
+        idcol = db.sql.column(self.column_id)
+        geomcol = db.sql.column(self.column_geom)
+
+        cols = map(db.sql.column, (f.keyname for f in self.fields))
+        cols.append(idcol)
+        cols.append(geomcol)
+
+        tab = db.sql.table(self.table, *cols)
+        tab.schema = self.schema
+
+        tab.quote = True
+        tab.quote_schema = True
+
+        stmt = db.update(tab).values(
+            self.makevals(feature)).where(idcol == feature.id)
+
+        try:
+            conn.execute(stmt)
+        finally:
+            conn.close()
+
+    def feature_create(self, feature):
+        """Insert new object to DB which is described in feature
+
+        :param feature: object description
+        :type feature:  Feature
+
+        :return:    inserted object ID
+        """
+        conn = self.connection.get_connection()
+
+        idcol = db.sql.column(self.column_id)
+        geomcol = db.sql.column(self.column_geom)
+
+        cols = map(db.sql.column, (f.keyname for f in self.fields))
+        cols.append(idcol)
+        cols.append(geomcol)
+
+        tab = db.sql.table(self.table, *cols)
+        tab.schema = self.schema
+
+        tab.quote = True
+        tab.quote_schema = True
+
+        stmt = db.insert(tab).values(
+            self.makevals(feature)).returning(idcol)
+
+        try:
+            return conn.execute(stmt).scalar()
+        finally:
+            conn.close()
+
+    def feature_delete(self, feature_id):
+        """Remove record with id
+
+        :param feature_id: record id
+        :type feature_id:  int or bigint
+        """
+        conn = self.connection.get_connection()
+
+        tab = db.sql.table(self.table)
+        tab.schema = self.schema
+
+        tab.quote = True
+        tab.quote_schema = True
+
+        stmt = db.delete(tab).where(
+            db.sql.column(self.column_id) == feature_id)
+
+        try:
+            conn.execute(stmt)
+        finally:
+            conn.close()
+
+    def feature_delete_all(self):
+        """Remove all records from a layer"""
+        conn = self.connection.get_connection()
+
+        tab = db.sql.table(self.table)
+        tab.schema = self.schema
+
+        tab.quote = True
+        tab.quote_schema = True
+
+        stmt = db.delete(tab)
+
+        try:
+            conn.execute(stmt)
+        finally:
+            conn.close()
 
 DataScope.read.require(
     ConnectionScope.connect,
@@ -319,8 +459,8 @@ DataScope.read.require(
 
 
 class _fields_action(SP):
-    """ Специальный write-only атрибут, обеспечивающий обновление
-    списка полей с сервера """
+    """ Special write-only attribute that allows updating
+    list of fields from the server """
 
     def setter(self, srlzr, value):
         if value == 'update':
@@ -450,7 +590,19 @@ class FeatureQueryBase(object):
         if self._filter:
             l = []
             for k, o, v in self._filter:
-                op = getattr(operator, o)
+                supported_operators = ('gt', 'lt', 'ge', 'le', 'eq', 'ne', 'like', 'ilike')
+                if o not in supported_operators:
+                    raise ValueError(
+                        "Invalid operator '%s'. Only %r are supported." % (
+                            o, supported_operators))
+
+                if o == 'like':
+                    o = 'like_op'
+
+                if o == 'ilike':
+                    o = 'ilike_op'
+
+                op = getattr(db.sql.operators, o)
                 if k == 'id':
                     l.append(op(idcol, v))
                 else:

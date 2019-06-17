@@ -6,12 +6,12 @@ import json
 from io import BytesIO
 from datetime import datetime
 from collections import OrderedDict
-from copy import deepcopy
 
 from zope.interface import implements
 from lxml import etree
 import PIL
-from owslib.wms import WebMapService, WMSCapabilitiesReader
+from owslib.wms import WebMapService
+from owslib.map.common import WMSCapabilitiesReader
 
 from .. import db
 from ..env import env
@@ -37,7 +37,7 @@ from .util import _
 
 Base = declarative_base()
 
-WMS_VERSIONS = ('1.1.1', )
+WMS_VERSIONS = ('1.1.1', '1.3.0')
 
 
 class Connection(Base, Resource):
@@ -51,8 +51,8 @@ class Connection(Base, Resource):
     username = db.Column(db.Unicode)
     password = db.Column(db.Unicode)
 
-    capcache_xml = db.Column(db.Unicode)
-    capcache_json = db.Column(db.Unicode)
+    capcache_xml = db.deferred(db.Column(db.Unicode))
+    capcache_json = db.deferred(db.Column(db.Unicode))
     capcache_tstamp = db.Column(db.DateTime)
 
     @classmethod
@@ -70,34 +70,7 @@ class Connection(Base, Resource):
                                        un=self.username,
                                        pw=self.password,
                                        headers=env.wmsclient.headers)
-        root = reader.read(self.url)
-
-        # В версии WMS 1.3.0 для всех элементов обязателен namespace,
-        # но некоторые добавляют этот namespace и в более старую версию,
-        # поэтому нужно это почистить.
-        if root.nsmap.get(None) == 'http://www.opengis.net/wms':
-            del root.nsmap[None]
-
-            for elem in root.getiterator():
-                if not hasattr(elem.tag, 'find'):
-                    continue
-                i = elem.tag.find('}')
-                if i >= 0 and elem.tag[1:i] == 'http://www.opengis.net/wms':
-                    elem.tag = elem.tag[i + 1:]
-
-            new = etree.Element(root.tag, nsmap=None)
-            new[:] = root[:]
-            root = new
-
-        # WMS-сервер GeoMixer почему-то не отдает OnlineResource внутри,
-        # тега Service, подставим из Capabilities.
-
-        if root.find('Service/OnlineResource') is None:
-            gcnode = root.find('Capability/Request/GetCapabilities')
-            ornode = gcnode.find('DCPType/HTTP/Get/OnlineResource')
-            root.find('Service').append(deepcopy(ornode))
-
-        self.capcache_xml = etree.tostring(root)
+        self.capcache_xml = etree.tostring(reader.read(self.url))
 
         service = WebMapService(
             url=self.url, version=self.version,
@@ -213,10 +186,17 @@ class Layer(Base, Resource, SpatialLayerMixin):
             version=self.connection.version,
             layers=self.wmslayers, styles="",
             format=self.imgformat,
-            srs="EPSG:%d" % self.srs.id,
             bbox=','.join(map(str, extent)),
             width=size[0], height=size[1],
             transparent="true")
+
+        # Vendor-specific parameters
+        for p in self.vendor_params:
+            query[p.key] = p.value
+
+        # In the GetMap operation the srs parameter is called crs in 1.3.0.
+        srs = 'crs' if self.connection.version == '1.3.0' else 'srs'
+        query[srs] = "EPSG:%d" % self.srs.id
 
         auth = None
         username = self.connection.username
@@ -225,9 +205,65 @@ class Layer(Base, Resource, SpatialLayerMixin):
             auth = (username, password)
 
         sep = "&" if "?" in self.connection.url else "?"
-        url = self.connection.url + sep + urllib.urlencode(query)
+
+        # ArcGIS server requires that space is url-encoded as "%20"
+        # but it does not accept space encoded as "+".
+        # It is always safe to replace spaces with "%20".
+        url = self.connection.url + sep + \
+            urllib.urlencode(query).replace("+", "%20")
+
         return PIL.Image.open(BytesIO(requests.get(
             url, auth=auth, headers=env.wmsclient.headers).content))
+
+
+class LayerVendorParam(Base):
+    __tablename__ = 'wmsclient_layer_vendor_param'
+
+    resource_id = db.Column(db.ForeignKey(Resource.id), primary_key=True)
+    key = db.Column(db.Unicode(255), primary_key=True)
+    value = db.Column(db.Unicode)
+
+    resource = db.relationship(Resource, backref=db.backref(
+        'vendor_params', cascade='all, delete-orphan'))
+
+
+class _vendor_params_attr(SP):
+
+    def getter(self, srlzr):
+        result = {}
+
+        for itm in getattr(srlzr.obj, 'vendor_params'):
+            result[itm.key] = itm.value
+
+        return result
+
+    def setter(self, srlzr, value):
+        odata = getattr(srlzr.obj, 'vendor_params')
+
+        rml = []     # Records to be removed
+        imap = {}    # Records to be rewritten
+
+        for i in odata:
+            if i.key in value and value[i.key] is not None:
+                imap[i.key] = i
+            else:
+                rml.append(i)
+
+        # Remove records to be removed
+        map(lambda i: odata.remove(i), rml)
+
+        for k, val in value.iteritems():
+            if val is None:
+                continue
+
+            itm = imap.get(k)
+
+            if itm is None:
+                # Create new record if there is no record to rewrite
+                itm = LayerVendorParam(key=k)
+                odata.append(itm)
+
+            itm.value = val
 
 
 DataScope.read.require(
@@ -246,3 +282,5 @@ class LayerSerializer(Serializer):
     wmslayers = SP(**_defaults)
     imgformat = SP(**_defaults)
     srs = SR(**_defaults)
+
+    vendor_params = _vendor_params_attr(**_defaults)

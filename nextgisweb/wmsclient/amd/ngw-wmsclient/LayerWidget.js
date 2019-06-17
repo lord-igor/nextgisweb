@@ -3,8 +3,6 @@ define([
     "dojo/_base/declare",
     "dojo/_base/array",
     "dojo/_base/lang",
-    "dojo/Deferred",
-    "dojo/when",
     "dojo/on",
     "dojo/aspect",
     "dojo/request/xhr",
@@ -17,7 +15,6 @@ define([
     "ngw-pyramid/i18n!wmsclient",
     "ngw-pyramid/hbs-i18n",
     "ngw-resource/serialize",
-    "ngw-resource/ResourceStore",
     // resource
     "dojo/text!./template/LayerWidget.hbs",
     // template
@@ -32,8 +29,6 @@ define([
     declare,
     array,
     lang,
-    Deferred,
-    when,
     on,
     aspect,
     xhr,
@@ -46,7 +41,6 @@ define([
     i18n,
     i18nHbs,
     serialize,
-    ResourceStore,
     template
 ) {
     return declare([ContentPane, serialize.Mixin, _TemplatedMixin, _WidgetsInTemplateMixin], {
@@ -75,7 +69,7 @@ define([
                 domConstruct.empty(widget.wLayerSelect.containerNode);
 
                 var table = put(widget.wLayerSelect.containerNode,
-                    "table.pure-table.pure-table-horizontal[width=100%]");
+                    "table.pure-table.pure-table-horizontal.pure-table-horizontal--s[width=100%]");
 
                 array.forEach(capdata.layers, function (i) {
                     var node = put(table, "tr td $ < td a.action $ ", i.id, i.title);
@@ -85,7 +79,7 @@ define([
 
             if (connection !== null) {
                 this.wConnection.store.get(connection.id).then(function (data) {
-                    xhr.get(route.resource.item(data.id),{
+                    xhr.get(route.resource.item(data.resource.id),{
                         handleAs: "json"
                     }).then(function (data) {
                         render(data.wmsclient_connection.capcache);
@@ -93,7 +87,7 @@ define([
                 });
             }
         },
-        
+
         toggleLayer: function (id) {
             var arr = this.wWMSLayers.get("value").split(/,\s*/);
             if (arr.length === 1 && arr[0] === "") {

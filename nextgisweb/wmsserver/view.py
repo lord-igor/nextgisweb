@@ -37,18 +37,18 @@ def handler(obj, request):
     request.resource_permission(ServiceScope.connect)
 
     params = dict((k.upper(), v) for k, v in request.params.iteritems())
-    req = params.get('REQUEST')
-    service = params.get('SERVICE')
+    req = params.get('REQUEST', '').upper()
+    service = params.get('SERVICE', '').upper()
 
-    if req == 'GetCapabilities':
+    if req == 'GETCAPABILITIES':
         if service != 'WMS':
             raise HTTPBadRequest("Invalid SERVICE parameter value.")
         return _get_capabilities(obj, request)
-    elif req == 'GetMap':
+    elif req == 'GETMAP':
         return _get_map(obj, request)
-    elif req == 'GetFeatureInfo':
+    elif req == 'GETFEATUREINFO':
         return _get_feature_info(obj, request)
-    elif req == 'GetLegendGraphic':
+    elif req == 'GETLEGENDGRAPHIC':
         return _get_legend_graphic(obj, request)
     else:
         raise HTTPBadRequest("Invalid REQUEST parameter value.")
@@ -205,8 +205,8 @@ def _get_feature_info(obj, request):
         query = flayer.feature_query()
         query.intersects(qgeom)
 
-        # Ограничим максимальное количество объектов из слоя, таким образом
-        # чтобы в итоге в любом случае не превысить их общее количество.
+        # Limit number of layer features so that we
+        # don't overshoot its total number
         query.limit(p_feature_count - fcount)
 
         features = list(query())
@@ -216,7 +216,7 @@ def _get_feature_info(obj, request):
             keyname=layer.keyname, display_name=layer.display_name,
             feature_layer=flayer, features=features))
 
-        # Необходимое количество объектов найдено, дальше не ищем
+        # Needed number of features found, stop search
         if fcount >= p_feature_count:
             break
 
@@ -243,11 +243,6 @@ def _get_legend_graphic(obj, request):
 def setup_pyramid(comp, config):
     config.add_route(
         'wmsserver.wms', '/api/resource/{id:\d+}/wms',
-        factory=resource_factory,
-    ).add_view(handler, context=Service)
-
-    config.add_route(
-        '#wmsserver.wms', '/resource/{id:\d+}/wms',
         factory=resource_factory,
     ).add_view(handler, context=Service)
 

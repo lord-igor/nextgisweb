@@ -3,15 +3,23 @@
 Vector layer data types
 ===============================
 
-Vector layer field types:
+.. _ngwdev_field_types:
 
-.. autoclass:: nextgisweb.feature_layer.interface.FIELD_TYPE
-    :members:
-    :undoc-members:
+The following vector layer field types are supported:
 
-Geometry types:
+* INTEGER - number
+* BIGINT - long number
+* REAL - floating point number
+* STRING - string
+* DATE - date
+* TIME - time
+* DATETIME - timestamp
 
-.. autoclass:: nextgisweb.feature_layer.interface.GEOM_TYPE
-    :members:
-    :undoc-members:
+The following vector layer geometry types are supported:
 
+* POINT
+* LINESTRING
+* POLYGON
+* MULTIPOINT
+* MULTILINESTRING
+* MULTIPOLYGON

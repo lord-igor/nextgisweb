@@ -145,12 +145,13 @@ class WFS(Format):
         '<gml:LineString><gml:coordinates>1.0,2.0 2.0,1.0</gml:coordinates></gml:LineString>'
         """
 
-        if "EPSG" not in str(srs):
-            srs = "EPSG:" + str(srs)
-
         if geometry['type'].lower() in \
                 ['point', 'linestring', 'polygon', 'multipolygon', 'multilinestring', 'multipoint']:
             geom_wkt = ogr.CreateGeometryFromJson(geojson.dumps(geometry))
+
+            osrs = ogr.osr.SpatialReference()
+            osrs.ImportFromEPSG(srs)
+            geom_wkt.AssignSpatialReference(osrs)
 
             gml = geom_wkt.ExportToGML(format)
             return gml
@@ -296,12 +297,12 @@ version="%s"
                     method.attrib['{%s}href' % (self.namespaces['xlink'])] = \
                         self.host + '?'
 
-        # Сейчас в NGW используется только один слой и datasource
-        # поэтому для того, чтобы определить параметр maxfeature нужно
-        # выбрать из datasources объект datasource (единственный там)
-        # и использовать его. Если datasource не один -- игнорируем процедуру
-        # извлечения maxfetature, чтобы не испортить работу других
-        # datasource (не из NGW)
+        # Currently NGW uses one layer and datasource
+        # so to set maxfeature we need to
+        # select from datasources single datasource
+        # and use it. If there are several datasources -- ignore
+        # extracting maxfeature, so we don't break work of other
+        # datasources (not from NGW)
         if len(self.layers) == 1:
             datasource = self.datasources[self.layers[0]]
             maxfeatures = datasource.default_maxfeatures
@@ -312,7 +313,6 @@ version="%s"
                 for e in count_elements:
                     e.text = str(maxfeatures)
 
-        # import ipdb; ipdb.set_trace()
         layers = self.getlayers()
         featureList = root.xpath("//*[local-name() = 'FeatureTypeList']")
         if len(featureList) > 0 and len(layers) > 0:
@@ -478,7 +478,7 @@ version="%s"
                     attrib_name = self.getFormatedAttributName(attrib_name)
 
             element = etree.Element(
-                'element', attrib={'name': str(attrib_name),
+                'element', attrib={'name': attrib_name,
                                    'minOccurs': '0',
                                    'type': type
                                    })

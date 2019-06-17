@@ -43,6 +43,11 @@ def handler(obj, request):
         request_method = 'GET'
         post_data = None
 
+    # WFS 1.0.0 bbox: 'BBOX=minX,minY,maxX,maxY'
+    # WFS 2.0.0 bbox: 'BBOX=minX,minY,maxX,maxY,EPSG:3857'
+    bbox = params.get('BBOX')
+    bbox = ','.join(bbox.split(',')[:4]) if bbox else None
+
     params = {
         'service': params.get('SERVICE'),
         'request': req,
@@ -56,14 +61,10 @@ def handler(obj, request):
         'startfeature': params.get('STARTFEATURE'),
         'filter': params.get('FILTER'),
         'format': params.get('OUTPUTFORMAT'),
-        'bbox': params.get('BBOX')
+        'bbox': bbox
     }
     # None values can cause parsing errors in featureserver. So delete 'Nones':
     params = {key: params[key] for key in params if params[key] is not None}
-
-    # Change 'acceptversions' to 'version', it allows use the code without change
-    if 'acceptversions' in params:
-        params['version'] = params['acceptversions']
 
     datasources = {
         l.keyname: NextgiswebDatasource(
@@ -89,16 +90,16 @@ def handler(obj, request):
         content_type = e.mime
         return Response(data, content_type=content_type)
 
-    # Отправляем результат обработки
+    # Send results
 
     if isinstance(result, tuple):
-        # ответ
-        # на запросы req.lower() in ['getcapabilities', 'describefeaturetype']
+        # respond
+        # for req.lower() in ['getcapabilities', 'describefeaturetype'] requests
         content_type, resxml = result
         resp = Response(resxml, content_type=content_type)
         return resp
     elif isinstance(result, FeatureserverResponse):
-        # ответ на запрос GetFeature, Update, Insert, Delete
+        # respond to GetFeature, Update, Insert, Delete requests
         data = result.getData()
         return Response(data, content_type=result.content_type)
 

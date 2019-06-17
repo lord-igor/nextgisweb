@@ -2,28 +2,27 @@
 define([
     "dojo/_base/declare",
     "dojo/_base/lang",
-    "ngw/modelWidget/Widget",
-    "ngw/modelWidget/ErrorDisplayMixin",
+    "dojo/store/Memory",
+    "ngw-pyramid/modelWidget/Widget",
+    "ngw-pyramid/modelWidget/ErrorDisplayMixin",
     "dijit/_TemplatedMixin",
     "dijit/_WidgetsInTemplateMixin",
     "ngw-pyramid/i18n!auth",
     "ngw-pyramid/hbs-i18n",
     "dojo/text!./template/UserWidget.hbs",
     "dojo/_base/array",
-    "dojo/on",
     // template
     "dijit/form/CheckBox",
     "dijit/form/ValidationTextBox",
     "dijit/form/SimpleTextarea",
     "dojox/layout/TableContainer",
-    "dojox/form/CheckedMultiSelect",
+    "ngw-auth/PrincipalMemberSelect",
     "ngw-pyramid/form/KeynameTextBox",
-    "ngw-pyramid/form/DisplayNameTextBox",
-    // css
-    "xstyle/css!" + ngwConfig.amdUrl + 'dojox/form/resources/CheckedMultiSelect.css'
+    "ngw-pyramid/form/DisplayNameTextBox"
 ], function (
     declare,
     lang,
+    Memory,
     Widget,
     ErrorDisplayMixin,
     _TemplatedMixin,
@@ -31,8 +30,7 @@ define([
     i18n,
     hbsI18n,
     template,
-    array,
-    on
+    array
 ) {
     return declare([Widget, ErrorDisplayMixin, _TemplatedMixin, _WidgetsInTemplateMixin], {
         templateString: hbsI18n(template, i18n),
@@ -61,11 +59,11 @@ define([
             var result = { isValid: true, error: [] };
 
             array.forEach([this.displayName, this.keyname, this.password], function (subw) {
-                // форсируем показ значка при проверке
+                // force icon display when checking
                 subw._hasBeenBlurred = true;
                 subw.validate();
 
-                // если есть ошибки, фиксируем их
+                // if there're errors, mark them
                 if (!subw.isValid()) {
                     result.isValid = false;
                 }
@@ -77,18 +75,18 @@ define([
         _setValueAttr: function (value) {
             this.displayName.set("value", value.display_name);
             this.keyname.set("value", value.keyname);
-            this.cbSuperuser.set("checked", value.superuser);
             this.cbDisabled.set("checked", value.disabled);
+            this.cbSuperuser.set("checked", value.superuser);
             this.description.set("value", value.description);
 
-            // По простому не работает, сделаем по сложному
-            var groups = lang.clone(this.groups);
-            if (this.value) {
-                array.forEach(groups, function (opt) {
-                    opt.selected = (this.value.member_of.indexOf(opt.value) !== -1);
-                }, this);
-            }
-            this.memberOf.addOption(this.groups);
+            // show groups where user is a member at the top of the list
+            var groupStore = new Memory({data: this.groups});
+            this.memberOf.addOption(
+                groupStore.query(null, {sort: [
+                    {attribute: "selected", descending: true},
+                    {attribute: "label"}
+                ]})
+            );
         },
 
         _getValueAttr: function () {

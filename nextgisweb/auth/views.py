@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+from pyramid.events import BeforeRender, subscriber
 from sqlalchemy.orm.exc import NoResultFound
 
 from pyramid.httpexceptions import HTTPUnauthorized, HTTPFound, HTTPForbidden
@@ -16,19 +17,19 @@ from .util import _
 def setup_pyramid(comp, config):
 
     def check_permission(request):
-        """ Чтобы избежать перекрестной зависимости двух компонентов -
-        auth и security, права доступа к редактированию пользователей
-        ограничиваются по критерию членства в группе administrators """
+        """ To avoid interdependency of two components:
+        auth and security, permissions to edit users
+        are limited by administrators group membership criterion"""
 
-        if not request.user.is_administrator:
-            raise HTTPForbidden("Membership in group 'administrators' required!")
+        request.require_administrator()
 
     def login(request):
         next = request.params.get('next', request.application_url)
 
         if request.method == 'POST':
             try:
-                user = User.filter_by(keyname=request.POST['login']).one()
+                user = User.filter_by(
+                    keyname=request.POST['login'].strip()).one()
 
                 if user.password == request.POST['password']:
                     headers = remember(request, user.id)
@@ -54,24 +55,24 @@ def setup_pyramid(comp, config):
     config.add_route('auth.logout', '/logout').add_view(logout)
 
     def forbidden(request):
-        # Если пользователь не аутентифицирован, то можно предложить ему войти
-        # TODO: Возможно есть способ лучше проверить наличие аутентификации
+        # If user is not authentificated, we can offer him to sign in
+        # TODO: there may be a better way to check if authentificated
 
         if request.user.keyname == 'guest':
-            # Если URL начинается с /api/ и пользователь не аутентифицирован,
-            # то скорее всего это не веб-интерфейс, а какой-то сторонний софт,
-            # который возможно умеет HTTP аутентификацию. Скажем ему что мы
-            # тоже умеем. Остальных переадресовываем на страницу логина.
+            # If URL starts with /api/ and user is not authentificated,
+            # then it's probably not a web-interface, but external software,
+            # that can do HTTP auth. Tell it that we can do too.
+            # Others are redirected to login page.
 
             if request.path_info.startswith('/api/'):
                 return HTTPUnauthorized(headers={
                     b'WWW-Authenticate': b'Basic realm="NextGISWeb"'})
             else:
                 return HTTPFound(location=request.route_url(
-                    'auth.login', _query=dict(next=request.url)))
+                    get_login_route_name(), _query=dict(next=request.url)))
 
-        # Уже аутентифицированным пользователям показываем сообщение об ошибке
-        # TODO: Отдельно можно информировать заблокированных пользователей
+        # Show error message to already authentificated users
+        # TODO: We can separately inform blocked users
         request.response.status = 403
         return dict(subtitle=_("Access denied"))
 
@@ -117,17 +118,22 @@ def setup_pyramid(comp, config):
             self.obj.description = self.data['description']
             self.obj.register = self.data['register']
 
+            self.obj.members = map(
+                lambda id: User.filter_by(id=id).one(),
+                self.data['members'])
+
         def validate(self):
             result = super(AuthGroupWidget, self).validate()
             self.error = []
 
-            conflict = Group.filter_by(
-                keyname=self.data.get("keyname")).first()
-            if conflict:
-                result = False
-                self.error.append(dict(
-                    message=self.request.localizer.translate(
-                        _("Group name is not unique."))))
+            if self.operation == 'create':
+                conflict = Group.filter_by(
+                    keyname=self.data.get("keyname")).first()
+                if conflict:
+                    result = False
+                    self.error.append(dict(
+                        message=self.request.localizer.translate(
+                            _("Group name is not unique."))))
 
             return result
 
@@ -140,6 +146,20 @@ def setup_pyramid(comp, config):
                     keyname=self.obj.keyname,
                     description=self.obj.description,
                     register=self.obj.register)
+
+                result['users'] = [
+                    dict(
+                        value=u.id,
+                        label=u.display_name,
+                        selected=u in self.obj.members
+                    ) for u in User.filter_by(system=False)]
+
+            else:
+                # List of all users for selector
+                result['users'] = [
+                    dict(value=u.id, label=u.display_name)
+                    for u in User.filter_by(system=False)
+                ]
 
             return result
 
@@ -186,10 +206,10 @@ def setup_pyramid(comp, config):
         def populate_obj(self):
             super(AuthUserWidget, self).populate_obj()
 
-            self.obj.display_name = self.data['display_name']
-            self.obj.keyname = self.data['keyname']
-            self.obj.superuser = self.data['superuser']
-            self.obj.disabled = self.data['disabled']
+            self.obj.display_name = self.data.get('display_name')
+            self.obj.keyname = self.data.get('keyname')
+            self.obj.superuser = self.data.get('superuser', False)
+            self.obj.disabled = self.data.get('disabled', False)
 
             if self.data.get('password', None) is not None:
                 self.obj.password = self.data['password']
@@ -204,13 +224,14 @@ def setup_pyramid(comp, config):
             result = super(AuthUserWidget, self).validate()
             self.error = []
 
-            conflict = User.filter_by(
-                keyname=self.data.get("keyname")).first()
-            if conflict:
-                result = False
-                self.error.append(dict(
-                    message=self.request.localizer.translate(
-                        _("Login is not unique."))))
+            if self.operation == 'create':
+                conflict = User.filter_by(
+                    keyname=self.data.get("keyname")).first()
+                if conflict:
+                    result = False
+                    self.error.append(dict(
+                        message=self.request.localizer.translate(
+                            _("Login is not unique."))))
 
             return result
 
@@ -236,7 +257,7 @@ def setup_pyramid(comp, config):
                 ]
 
             else:
-                # Список всех групп для поля выбора
+                # List of all groups to selection field
                 result['groups'] = [
                     dict(value=g.id, label=g.display_name)
                     for g in Group.query()
@@ -356,3 +377,16 @@ def setup_pyramid(comp, config):
         dm.Label('auth-group', _("Groups")),
         GroupMenu('auth-group'),
     )
+
+    # Login and logout routes names
+    def get_login_route_name():
+        return comp.settings.get('login_route_name', 'auth.login')
+
+    def get_logout_route_name():
+        return comp.settings.get('logout_route_name', 'auth.logout')
+
+    def add_globals(event):
+        event['login_route_name'] = get_login_route_name()
+        event['logout_route_name'] = get_logout_route_name()
+
+    config.add_subscriber(add_globals, BeforeRender)

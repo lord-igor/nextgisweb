@@ -4,6 +4,8 @@ from __future__ import unicode_literals
 import pickle
 import json
 import re
+import magic
+
 from shutil import copyfileobj
 from subprocess import check_output
 
@@ -19,15 +21,15 @@ def test(request):
 
 
 def upload_post(request):
-    """ Загрузка файла через стандартный механизм x-www-form-urlencoded """
+    """ Upload through standard x-www-form-urlencoded """
 
     comp = env.file_upload
 
     metas = []
 
-    # Файл загружается как объект класса cgi.FieldStorage у которого есть
-    # свойства type(тип файла) и filename(имя файла), cвойства содержащего
-    # размер файла - нет, поэтому напишем свою реализацию.
+    # File is uploaded as object of class cgi.FieldStorage which has
+    # properties type(file type) and filename(file name), there is no file size property
+    # so let's add our own implementation.
 
     def get_file_size(file):
         file.seek(0, 2)
@@ -35,7 +37,7 @@ def upload_post(request):
         file.seek(0)
         return size
 
-    # Определяем использовался ли режим множественной загрузки
+    # Determine if multi-threaded upload was used
 
     ufiles = request.POST.getall('files[]') \
         if 'files[]' in request.POST \
@@ -61,15 +63,16 @@ def upload_post(request):
 
         metas.append(meta)
 
-    # TODO: Добавить поддержку IFrame для IE и Flash uploader
-    return Response("%s" % json.dumps(dict(upload_meta=metas)))
+    # TODO: Add IFrame support for IE and Flash uploader
+    return Response(json.dumps(dict(upload_meta=metas)),
+                    content_type=b'application/json')
 
 
 def upload_put(request):
-    """ Загрузка файла через HTTP PUT
+    """ Upload file through HTTP PUT
 
-    TODO: Здесь же в будущем можно будет реализовать возобновляемую загрузку,
-    по крайней мере для тех браузеров, что поддерживают FileAPI """
+    TODO: Here we can add break-and-continue upload at least
+    for browsers that support FileAPI """
 
     comp = env.file_upload
 
@@ -92,13 +95,12 @@ def upload_put(request):
         copyfileobj(request.body_file, fd)
         meta['size'] = fd.tell()
 
-    # Если при загрузке не был указан MIME-тип, то определяем его
-    # самостоятельно, через вызов утилиты file. Стандартный модуль mimetypes
-    # делает это только по расширению, но имя файла может быть неизвестно.
+    # If MIME-type was not declared on upload, define independently
+    # by running file. Standard mimetypes package does it only using extension
+    # but we don't always know filename.
 
     if not mime:
-        mime, _ = check_output(['file', '--mime', '--brief', datafn]) \
-            .split('; ')
+        mime = magic.from_file(datafn, mime=True)
 
     meta['mime_type'] = mime
 
@@ -118,8 +120,3 @@ def setup_pyramid(comp, config):
         '/api/component/file_upload/upload') \
         .add_view(upload_post, method='POST') \
         .add_view(upload_put, method='PUT')
-
-    # TODO: Обратная совместимость, со временем удалить
-    config.add_route('#file_upload.upload', '/file_upload/upload') \
-        .add_view(upload_post, request_method='POST') \
-        .add_view(upload_put, request_method='PUT')
